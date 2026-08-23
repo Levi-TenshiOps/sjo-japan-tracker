@@ -109,6 +109,9 @@ class Config:
     state_file: str = "state.json"
     throttle_file: str = "throttle.json"
     rotation_file: str = "rotation.json"
+    # Written by sweep_forever.py, read here. Missing is fine - it just
+    # means the background sweep is not running.
+    sweep_store: str = "discoveries.json"
     dashboard_url: str = ""
 
     # -- validation -------------------------------------------------------

@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Run the full-coverage sweep, indefinitely.
+
+The scheduled tracker cannot cover the search space: Chrome prices ~120
+windows a day against ~4,000, so a bargain on an unwatched date can sit
+there for weeks. This process closes that hole by walking every window in
+order, forever, and writing what it finds to `discoveries.json`, which the
+scheduled run folds into the email.
+
+    python sweep_forever.py                 # run until stopped
+    python sweep_forever.py --delay 12      # gentler on the IP
+    python sweep_forever.py --status        # what has it found so far?
+    python sweep_forever.py --once          # a single batch, then exit
+
+Leave it running in its own terminal, or install it as a service. It is
+safe to stop at any time: the cursor is saved after every batch, so it
+resumes where it left off rather than starting the pass again.
+
+On pacing: at the default 8-second delay a launch cycle is roughly 21
+seconds, so a ~4,000-window pass takes about a day. Raise `--delay` if the
+empty rate climbs; the sweep is meant to be the slowest, politest thing in
+the project, because getting the IP blocked would take the scheduled runs
+down with it.
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import signal
+import sys
+import time
+from datetime import date as Date
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from tracker import config as config_mod          # noqa: E402
+from tracker.browser import chrome_path           # noqa: E402
+from tracker.preferences import Preferences, PreferencesError  # noqa: E402
+from tracker.schedule import generate_windows     # noqa: E402
+from tracker.sweeper import (                     # noqa: E402
+    DEFAULT_STORE, Discovery, SweepStore, sweep_batch,
+)
+
+log = logging.getLogger("sweep")
+_stop = False
+
+
+def _handle_signal(signum, frame):      # noqa: ARG001
+    global _stop
+    _stop = True
+    log.info("Stop requested; finishing the current window then saving.")
+
+
+def build_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Sweep every window, forever.")
+    p.add_argument("-c", "--config", default=config_mod.DEFAULT_CONFIG_PATH)
+    p.add_argument("-p", "--preferences", default="preferences.json")
+    p.add_argument("--store", default=DEFAULT_STORE)
+    p.add_argument("--delay", type=float, default=8.0,
+                   help="seconds between launches (default 8)")
+    p.add_argument("--batch", type=int, default=10,
+                   help="windows priced before each save (default 10)")
+    p.add_argument("--once", action="store_true", help="one batch, then exit")
+    p.add_argument("--status", action="store_true",
+                   help="print progress and findings, then exit")
+    p.add_argument("-v", "--verbose", action="store_true")
+    return p.parse_args()
+
+
+def main() -> int:
+    args = build_args()
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S")
+
+    try:
+        prefs = Preferences.load(args.preferences)
+    except PreferencesError as exc:
+        log.error("%s", exc)
+        return 2
+    cfg = config_mod.load(args.config)
+
+    windows = generate_windows(prefs, today=Date.today())
+    store = SweepStore.load(args.store)
+
+    if args.status:
+        print(store.progress(len(windows)))
+        best = store.best(limit=15, threshold=None)
+        if not best:
+            print("No findings yet.")
+        else:
+            print(f"\nCheapest {len(best)} window(s) found:")
+            for d in best:
+                flag = "  <-- under threshold" if d.price_usd <= prefs.good_price_usd else ""
+                print(f"  {d.describe()}{flag}")
+        return 0
+
+    if chrome_path(cfg.chrome_path) is None:
+        log.error("Chrome not found. Install it, or set chrome_path in %s",
+                  args.config)
+        return 2
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
+    cycle = args.delay + 13.0            # a launch measures ~13s
+    log.info("Sweeping %d window(s) to %s, %.0fs apart "
+             "(~%.1f h per full pass). Ctrl-C to stop.",
+             len(windows), cfg.chrome_destination, args.delay,
+             len(windows) * cycle / 3600.0)
+    log.info("Resuming at %s", store.progress(len(windows)))
+
+    def announce(d: Discovery) -> None:
+        if d.price_usd <= prefs.good_price_usd:
+            log.info("*** FOUND %s ***", d.describe())
+        else:
+            log.debug("new best for window: %s", d.describe())
+
+    while True:
+        try:
+            sweep_batch(
+                windows, store,
+                origin=cfg.origins[0], destination=cfg.chrome_destination,
+                max_stops=cfg.max_stops, batch=args.batch,
+                chrome_override=cfg.chrome_path, timeout_s=cfg.chrome_timeout_s,
+                budget_ms=cfg.chrome_budget_ms, delay_s=args.delay,
+                on_find=announce,
+            )
+        except Exception as exc:            # noqa: BLE001 - must not die
+            log.warning("batch failed (%s); pausing 60s", exc)
+            time.sleep(60)
+
+        dropped = store.prune()
+        store.save(args.store)
+        under = store.best(limit=3, threshold=prefs.good_price_usd)
+        log.info("%s%s%s", store.progress(len(windows)),
+                 f", {dropped} pruned" if dropped else "",
+                 f", cheapest under threshold ${under[0].price_usd:,}" if under else "")
+
+        if args.once or _stop:
+            log.info("Stopped. %s", store.progress(len(windows)))
+            return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

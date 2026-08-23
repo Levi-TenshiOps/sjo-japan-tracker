@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 from . import (
     alerts, config as config_mod, email_render, history, monthly, notify,
-    pricing, ranking, schedule, throttle, verify as verify_mod,
+    pricing, ranking, schedule, sweeper, throttle, verify as verify_mod,
 )
 from .itinerary import Itinerary, dedupe, format_price, partition
 from .preferences import Preferences, PreferencesError
@@ -323,6 +323,24 @@ def run(argv: list[str] | None = None) -> int:
             timeout_s=cfg.chrome_timeout_s, budget_ms=cfg.chrome_budget_ms,
             sleep=time.sleep, delay_s=cfg.request_delay_seconds,
         )
+    # Fold in whatever the background sweep has found since the last run.
+    # It walks every window in the space, so it reaches dates this run's
+    # twenty Chrome launches never touch. A missing store just means the
+    # sweep is not running, which must never break the email.
+    try:
+        store = sweeper.SweepStore.load(cfg.sweep_store)
+        swept = [d.to_option() for d in store.best(limit=12)]
+    except Exception as exc:                # noqa: BLE001
+        log.debug("sweep store unreadable (%s); continuing without it", exc)
+        swept = []
+    if swept:
+        known = {(o.depart_date, o.return_date, o.price_usd) for o in verified}
+        fresh = [o for o in swept
+                 if (o.depart_date, o.return_date, o.price_usd) not in known]
+        log.info("Background sweep contributed %d window(s); cheapest %s",
+                 len(fresh), format_price(min(o.price_usd for o in swept)))
+        verified = sorted(verified + fresh, key=lambda o: o.price_usd)
+
         cheap = verify_mod.under(verified, cfg.good_price_usd)
         if cheap:
             log.info("CHROME FOUND %d fare(s) at or under %s:",
