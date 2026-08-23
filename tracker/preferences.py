@@ -115,6 +115,22 @@ class Preferences:
     # owner's call, not an optimisation to apply on their behalf.
     excluded_months: list[int] = field(default_factory=list)
 
+    # Must the *whole* trip fall inside the searched months, or only the
+    # day it departs?
+    #
+    # Only-the-departure was the original behaviour and it is wrong for a
+    # trip planner. With October to March searched and a 21-38 night trip,
+    # it kept 531 windows - 16% of the grid - whose return lands in April or
+    # May. A departure on 2027-03-31 returns between 21 April and 8 May: the
+    # entire holiday happens in months that were deliberately excluded. As
+    # the trip owner put it, it "won't make sense".
+    #
+    # Checked across every month the trip touches, not just its two ends. At
+    # 21-38 nights a trip can span three calendar months (31 January + 38
+    # nights lands in March), so testing only departure and return would let
+    # a trip pass straight through an excluded month in the middle.
+    whole_trip_in_searched_months: bool = True
+
     # Acceptable trip lengths, in whole weeks. The trip owner picks these
     # once; editing the list later is a one-line change or a re-run of setup.
     trip_weeks: list[int] = field(default_factory=lambda: [2, 3, 4])
@@ -231,6 +247,19 @@ class Preferences:
 
     def is_priority_month(self, d: Date) -> bool:
         return d.month in set(self.priority_months)
+
+    def trip_is_searchable(self, depart: Date, back: Date) -> bool:
+        """Is this whole (depart, return) trip inside the searched months?"""
+        if not self.whole_trip_in_searched_months:
+            return not self.is_excluded_month(depart)
+        y, m = depart.year, depart.month
+        while (y, m) <= (back.year, back.month):
+            if self.is_excluded_month(Date(y, m, 1)):
+                return False
+            m += 1
+            if m == 13:
+                m, y = 1, y + 1
+        return True
 
     def is_excluded_month(self, d: Date) -> bool:
         """True when this departure date's month is not being searched."""

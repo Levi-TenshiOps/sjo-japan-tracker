@@ -201,10 +201,48 @@ The sweep order then falls out of `sweep_order` for free - priority months
 first, then the rest in date order:
 
     January -> February -> March -> October -> November -> December
-      558        504        558       558        540        558
 
-**3,276 windows, down from 4,014.** With the derived hot share that is a
-full exhaustive pass in 4.1 days at 90s, 2.1 days at 45s, 1.4 days at 30s.
+## The whole trip must be in the searched months, not just its first day
+
+Filtering on the departure day alone models the wrong thing, and the trip
+owner spotted it: *"a departure day on 31 Mar 2027 won't make sense,
+because the trip duration minimum is 21 days."*
+
+They were right. Of 3,276 windows, **531 - 16% - returned in April or May**.
+A 2027-03-31 departure comes home between 21 April and 8 May, so the entire
+holiday happens in months that were deliberately excluded. Those windows
+were being priced, at roughly 14 hours of sweep time a pass, for trips
+nobody would take.
+
+`whole_trip_in_searched_months` (default on) checks **every calendar month
+the trip touches**, not just its two ends. At 21-38 nights a trip can span
+three months - 31 January plus 38 nights lands in March - so testing only
+departure and return would let a trip pass straight through an excluded
+month in the middle.
+
+The effect is a taper rather than a cliff. Each departure day keeps only
+the lengths that still end inside the searched months:
+
+    2027-03-01   10 lengths (21n..30n)
+    2027-03-05    6 lengths
+    2027-03-10    1 length  (21n, landing exactly on 2027-03-31)
+    2027-03-11    dropped entirely
+
+February loses 7+6+5+4+3+2+1 = 28 windows the same way.
+
+    2026-10  558    2027-01  558
+    2026-11  540    2027-02  476   (was 504)
+    2026-12  558    2027-03   55   (was 558)
+
+**2,745 windows, down from 4,014 at the start of the day.** A full
+exhaustive pass is 3.4 days at 90s, **1.7 days at 45s**, 1.2 days at 30s -
+inside the two-day target the trip owner asked for.
+
+The cost is real and worth stating: **March is now only ten departure
+days.** Departing later in March means returning in April, and April is not
+searched. If a late-March departure is ever wanted, April has to be added
+to `included_months` - or set `whole_trip_in_searched_months: false` to go
+back to filtering on the departure day alone.
 
 `setup_tracker.py` asks for this, so re-running setup no longer silently
 resets it to "every month" and brings April and September back.

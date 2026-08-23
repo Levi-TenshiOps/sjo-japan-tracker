@@ -517,3 +517,78 @@ class TestBugsFoundInTheMonthAudit:
         narrow = self.prefs(included_months=[1]).months_in_horizon(
             today=date(2026, 8, 23))
         assert wide == narrow
+
+
+class TestTheWholeTripMustBeInSearchedMonths:
+    """Filtering on the departure day alone models the wrong thing.
+
+    Raised by the trip owner 2026-08-23: "a departure day on 31 Mar 2027
+    won't make sense, because the trip duration minimum is 21 days". They
+    were right. With October to March searched and 21-38 night trips, 531
+    windows - 16% of the grid - returned in April or May. A 2027-03-31
+    departure returns between 21 April and 8 May: the entire holiday
+    happens in months that were deliberately excluded.
+    """
+
+    def prefs(self, whole=True, **kw):
+        base = dict(alert_email="a@b.c", search_months=8, min_lead_days=21,
+                    departure_step_days=1, trip_weeks=[3], extra_nights=list(range(21, 39)),
+                    destinations=["TYO"], priority_months=[],
+                    included_months=[1, 2, 3, 10, 11, 12],
+                    whole_trip_in_searched_months=whole)
+        base.update(kw)
+        return Preferences(**base)
+
+    def windows(self, **kw):
+        return generate_windows(self.prefs(**kw), today=date(2026, 8, 23))
+
+    def test_no_trip_returns_outside_the_searched_months(self):
+        assert all(w.back.month in {1, 2, 3, 10, 11, 12}
+                   for w in self.windows())
+
+    def test_the_last_departure_is_the_one_that_can_still_come_home(self):
+        """March 10 + 21 nights lands exactly on March 31."""
+        ws = self.windows()
+        assert max(w.depart for w in ws) == date(2027, 3, 10)
+        assert max(w.back for w in ws) == date(2027, 3, 31)
+
+    def test_march_tapers_rather_than_stopping_dead(self):
+        """Each March day keeps only the lengths that still end in March."""
+        ws = self.windows()
+        by_day = {}
+        for w in ws:
+            if w.depart.month == 3:
+                by_day.setdefault(w.depart, []).append(w)
+        assert len(by_day[date(2027, 3, 1)]) == 10     # 21n..30n
+        assert len(by_day[date(2027, 3, 10)]) == 1     # 21n only
+        assert date(2027, 3, 11) not in by_day
+
+    def test_the_count_is_what_the_arithmetic_says(self):
+        """February loses 7+6+..+1 = 28; March keeps 10+9+..+1 = 55."""
+        ws = self.windows()
+        feb = [w for w in ws if w.depart.month == 2]
+        mar = [w for w in ws if w.depart.month == 3]
+        assert len(feb) == 28 * 18 - 28
+        assert len(mar) == 55
+        assert len(ws) == 2745
+
+    def test_a_trip_passing_through_an_excluded_month_is_dropped(self):
+        """Testing only the two ends is not enough.
+
+        At 21-38 nights a trip spans up to three calendar months, so a
+        middle month must be checked too - otherwise a trip could pass
+        straight through an excluded month.
+        """
+        p = self.prefs(included_months=[1, 3], priority_months=[])
+        # 31 January + 38 nights = 10 March: starts and ends in an included
+        # month, but the whole of February is excluded.
+        assert p.trip_is_searchable(date(2027, 1, 31), date(2027, 3, 10)) is False
+
+    def test_turning_it_off_restores_departure_only_filtering(self):
+        loose = self.windows(whole=False)
+        assert len(loose) == 3276
+        assert any(w.back.month == 4 for w in loose)
+
+    def test_it_is_a_no_op_when_no_months_are_filtered(self):
+        p = self.prefs(included_months=[], excluded_months=[])
+        assert p.trip_is_searchable(date(2027, 3, 31), date(2027, 5, 8)) is True

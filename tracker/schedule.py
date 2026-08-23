@@ -102,6 +102,12 @@ def generate_windows(
         for nights in nights_options:
             w = Window(day, day + timedelta(days=nights),
                        priority=prefs.is_priority_month(day))
+            # The *whole* trip has to be inside the searched months, not
+            # just the day it leaves. Departing 2027-03-31 on a 21-night
+            # minimum returns 2027-04-21, so the entire holiday falls in a
+            # month that was deliberately excluded.
+            if not prefs.trip_is_searchable(w.depart, w.back):
+                continue
             if w.key not in seen:
                 seen.add(w.key)
                 windows.append(w)
