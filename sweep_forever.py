@@ -71,6 +71,9 @@ def build_args() -> argparse.Namespace:
     p.add_argument("--once", action="store_true", help="one batch, then exit")
     p.add_argument("--status", action="store_true",
                    help="print progress and findings, then exit")
+    p.add_argument("--log", default="sweep.log",
+                   help="append the run log here as well as the terminal "
+                        "(default sweep.log; empty string disables)")
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args()
 
@@ -80,6 +83,22 @@ def main() -> int:
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S")
+
+    # The throttle warnings are the whole early-warning system, and until now
+    # they only ever went to the terminal the sweep was launched from. Close
+    # that window and they are gone - on 2026-08-23 the running sweep's
+    # health was unreadable for exactly this reason, while sweep.log still
+    # held a previous run's output and looked current. Append, with the date
+    # in the file's format, so one file covers the whole history.
+    if args.log and not args.status:
+        try:
+            fh = logging.FileHandler(args.log, encoding="utf-8")
+            fh.setFormatter(logging.Formatter(
+                "%(asctime)s %(levelname)-7s %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S"))
+            logging.getLogger().addHandler(fh)
+        except OSError as exc:
+            log.warning("could not open %s for logging: %s", args.log, exc)
 
     try:
         prefs = Preferences.load(args.preferences)
@@ -139,6 +158,8 @@ def main() -> int:
                 on_find=announce, history_csv=cfg.sweep_history_csv,
                 lock_path=cfg.google_lock,
                 hot_threshold=prefs.good_price_usd,
+                save_to=args.store,
+                should_stop=lambda: _stop,
             )
         except Exception as exc:            # noqa: BLE001 - must not die
             log.warning("batch failed (%s); pausing 60s", exc)

@@ -402,6 +402,34 @@ def resume_index(windows: Sequence, store: "SweepStore") -> int:
     return min(store.cursor, max(len(windows) - 1, 0))
 
 
+def rest_in_slices(sleep: Callable[[float], None], seconds: float,
+                   should_stop: Callable[[], bool] | None,
+                   *, step: float = 5.0) -> bool:
+    """Sleep `seconds`, but notice a stop request while doing it.
+
+    A throttle rest is 15 to 60 minutes and used to be one flat
+    `sleep(rest_for)`. Because `sweep_forever` installs a SIGINT handler
+    that only sets a flag, Ctrl-C during a rest did nothing at all: Python
+    ran the handler and went straight back to sleeping the remainder, and
+    the flag is not read until `sweep_batch` returns. Observed 2026-08-23 -
+    the trip owner pressed Ctrl-C twice, got "Stop requested" twice, and the
+    process sat there for another twenty minutes.
+
+    Returns True if it was asked to stop.
+    """
+    if should_stop is None:
+        sleep(seconds)
+        return False
+    slept = 0.0
+    while slept < seconds:
+        if should_stop():
+            return True
+        chunk = min(step, seconds - slept)
+        sleep(chunk)
+        slept += chunk
+    return should_stop()
+
+
 def sweep_batch(
     windows: Sequence,
     store: SweepStore,
@@ -423,6 +451,8 @@ def sweep_batch(
     lock_timeout: float = 300.0,
     hot_threshold: int | None = None,
     hot_share: float = HOT_SHARE,
+    save_to: str | Path | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> int:
     """Price the next `batch` windows, advancing and wrapping the cursor.
 
@@ -447,6 +477,8 @@ def sweep_batch(
 
     done = 0
     for _ in range(batch):
+        if should_stop is not None and should_stop():
+            break
         if store.cursor >= len(windows):
             store.cursor = 0
             store.passes_completed += 1
@@ -532,6 +564,20 @@ def sweep_batch(
         store.last_active = _now()
         done += 1
 
+        # Persist here, not just at the end of the batch. `--status` reads
+        # this file, and a batch of 25 is ~40 minutes of pricing - longer
+        # once a throttle starts adding rests. Saving per batch therefore
+        # made the health line most stale exactly when it was most needed:
+        # asked mid-throttle on 2026-08-23 it reported a 91-minute-old
+        # snapshot, which read as "still stuck" long after the rests began
+        # working. The write is atomic and the file is ~200KB, so the cost
+        # is irrelevant beside answering "is it throttled right now?".
+        if save_to:
+            try:
+                store.save(save_to)
+            except OSError as exc:
+                log.debug("could not save the sweep store: %s", exc)
+
         if throttled:
             if not store.throttled_since:
                 store.throttled_since = _now()
@@ -551,9 +597,11 @@ def sweep_batch(
                             "(rest #%d). %d window(s) waiting to be re-checked.",
                             stuck_s / 60, rest_for / 60,
                             store.consecutive_rests, len(store.suspect))
-                sleep(rest_for)
+                stopped = rest_in_slices(sleep, rest_for, should_stop)
                 store.recent.clear()        # judge the next stretch afresh
                 store.throttled_since = ""
+                if stopped:
+                    break
                 continue
             log.warning("Empty rate %.0f%% over the last %d windows - looks "
                         "throttled, not empty. Slowing down; %d window(s) "

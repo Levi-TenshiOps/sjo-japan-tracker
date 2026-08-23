@@ -13,6 +13,7 @@ import pytest
 
 from tracker.browser import BrowserOption
 from tracker.schedule import Window
+from tracker import sweeper
 from tracker.sweeper import (
     Discovery, SweepStore, sweep_batch,
 )
@@ -798,3 +799,127 @@ class TestHotAndColdTiering:
     def test_empty_window_list_is_handled(self):
         from tracker.sweeper import next_window
         assert next_window([], SweepStore()) == (None, False)
+
+
+class TestTheStoreIsReadableWhileTheSweepRuns:
+    """`--status` reads the store file, so the file must not lag the sweep.
+
+    Found 2026-08-23. Asked "are we still throttled?" mid-throttle, --status
+    answered from a 91-minute-old snapshot: the store was written once per
+    batch of 25, which is ~40 minutes of pricing and far longer once the
+    throttle rests kick in. The health line was therefore stalest exactly
+    when it mattered, and reported a throttle that the rests had already
+    started clearing.
+    """
+
+    def test_the_store_is_written_during_a_batch_not_only_after(self, dom):
+        """The cursor on disk must move while the batch is still running."""
+        seen = []
+
+        class Watcher(SweepStore):
+            def save(self, path=None):        # noqa: D102
+                seen.append(self.cursor)
+
+        s = Watcher()
+        sweep_batch(windows(5), s, batch=5, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0, save_to="ignored.json")
+        assert seen == [1, 2, 3, 4, 5], seen
+
+    def test_without_save_to_nothing_is_written(self, dom):
+        """Callers that manage their own saving must not be surprised."""
+        seen = []
+
+        class Watcher(SweepStore):
+            def save(self, path=None):        # noqa: D102
+                seen.append(self.cursor)
+
+        sweep_batch(windows(3), Watcher(), batch=3, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        assert seen == []
+
+    def test_the_file_on_disk_tracks_the_sweep(self, dom, tmp_path):
+        store_path = tmp_path / "discoveries.json"
+        s = SweepStore()
+        sweep_batch(windows(4), s, batch=4, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0, save_to=store_path)
+        assert SweepStore.load(store_path).cursor == 4
+
+    def test_a_read_only_store_path_does_not_kill_the_sweep(self, dom):
+        """Losing a status update is survivable; stopping the sweep is not."""
+        class Broken(SweepStore):
+            def save(self, path=None):        # noqa: D102
+                raise OSError("disk full")
+
+        s = Broken()
+        priced = sweep_batch(windows(3), s, batch=3, fetch=FakeChrome(dom),
+                             sleep=lambda _: None, delay_s=0,
+                             save_to="anywhere.json")
+        assert priced == 3
+
+
+class TestCtrlCWorksDuringAThrottleRest:
+    """Ctrl-C must stop the sweep even mid-rest.
+
+    Found 2026-08-23 by the trip owner. The sweep was resting 30 minutes
+    after a throttle; they pressed Ctrl-C twice, saw "Stop requested;
+    finishing the current window then saving." twice, and the process kept
+    running. `sweep_forever` installs a SIGINT handler that only sets a
+    flag, so Python ran the handler and went straight back to sleeping the
+    remainder of one flat `sleep(1800)` - and the flag is not read until
+    `sweep_batch` returns, which it would not do for another 20 minutes.
+    """
+
+    def test_a_rest_is_slept_in_slices(self):
+        naps = []
+        stopped = sweeper.rest_in_slices(naps.append, 60.0, lambda: False,
+                                         step=5.0)
+        assert stopped is False
+        assert sum(naps) == pytest.approx(60.0)
+        assert len(naps) == 12, "one flat sleep cannot notice a stop request"
+
+    def test_a_rest_ends_early_when_asked_to_stop(self):
+        naps = []
+        flag = {"stop": False}
+
+        def should_stop():
+            # Ask to stop once a little time has passed, as a signal would.
+            if sum(naps) >= 10.0:
+                flag["stop"] = True
+            return flag["stop"]
+
+        assert sweeper.rest_in_slices(naps.append, 3600.0, should_stop,
+                                      step=5.0) is True
+        assert sum(naps) < 3600.0, "it must not sleep the whole hour"
+        assert sum(naps) <= 15.0
+
+    def test_no_stop_callback_still_sleeps_the_whole_rest(self):
+        naps = []
+        assert sweeper.rest_in_slices(naps.append, 900.0, None) is False
+        assert naps == [900.0]
+
+    def test_the_batch_stops_between_windows_when_asked(self, dom):
+        s = SweepStore()
+        priced = sweep_batch(windows(10), s, batch=10, fetch=FakeChrome(dom),
+                             sleep=lambda _: None, delay_s=0,
+                             should_stop=lambda: True)
+        assert priced == 0, "a stop before the first window must price none"
+
+    def test_the_batch_runs_normally_without_a_stop_callback(self, dom):
+        """The default must not change behaviour for existing callers."""
+        s = SweepStore()
+        assert sweep_batch(windows(4), s, batch=4, fetch=FakeChrome(dom),
+                           sleep=lambda _: None, delay_s=0) == 4
+
+    def test_stopping_partway_keeps_what_was_already_priced(self, dom):
+        seen = {"n": 0}
+
+        def should_stop():
+            seen["n"] += 1
+            return seen["n"] > 3      # let a couple through, then stop
+
+        s = SweepStore()
+        priced = sweep_batch(windows(10), s, batch=10, fetch=FakeChrome(dom),
+                             sleep=lambda _: None, delay_s=0,
+                             should_stop=should_stop)
+        assert 0 < priced < 10
+        assert s.cursor == priced, "the cursor must still be saveable"
