@@ -582,8 +582,11 @@ def verified_block_html(verified, threshold: int) -> str:
         hrs, mins = divmod(o.total_minutes, 60)
         under = o.price_usd <= threshold
         colour = GREEN if under else INK
+        # The link is price-capped, so it opens on this fare rather than a
+        # list. Say "book" because that is what it is one click from.
         link = (f'<a href="{escape(o.deep_link)}" '
-                f'style="color:#1a73e8;text-decoration:none;">View</a>'
+                f'style="color:#1a73e8;text-decoration:none;font-weight:600;">'
+                f'See &amp; book &rarr;</a>'
                 if o.deep_link else "")
         rows.append(
             f'<tr>'
@@ -618,7 +621,7 @@ def verified_block_text(verified, threshold: int) -> list[str]:
         lines.append(f"    {o.depart_date} to {o.return_date} ({o.nights}n), "
                      f"{hrs} hr {mins} min, {', '.join(o.airlines)}")
         if o.deep_link:
-            lines.append(f"    {o.deep_link}")
+            lines.append(f"    See & book: {o.deep_link}")
     lines.append("")
     return lines
 

@@ -30,15 +30,52 @@ an option whose routing could not be read fails closed.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date as Date
 from datetime import timedelta
 from typing import Callable, Iterable, Sequence
+
+from fast_flights import FlightQuery, Passengers, create_query
 
 from .browser import BrowserOption, chrome_path, fetch_dom, parse_options
 from .search import RouteQuery, build_query
 
 log = logging.getLogger(__name__)
+
+
+# How far above the found price to cap the deep link. Tight enough that the
+# link opens on the one flight rather than a page of thirteen, loose enough
+# that a small overnight rise does not turn it into an empty page.
+LINK_PRICE_MARGIN = 0.10
+
+
+def booking_link(
+    option: BrowserOption, *, max_stops: int | None = 2,
+    margin: float = LINK_PRICE_MARGIN,
+) -> str:
+    """A link that opens Google Flights *on this fare*, not on a result list.
+
+    Google's own booking URL encodes the individual flight numbers, and
+    those only exist in the DOM after a result is clicked - which
+    `--dump-dom` cannot do. A price cap gets to the same place: measured on
+    the $1,347 Zurich fare, the uncapped search returned 13 options while
+    the capped one returned exactly 1. So the trip owner lands on the
+    flight and is one click from Google's Book button.
+    """
+    cap = int(round(option.price_usd * (1 + margin) / 10.0) * 10)
+    legs = [
+        FlightQuery(date=option.depart_date.isoformat(),
+                    from_airport=option.origin, to_airport=option.destination,
+                    max_stops=max_stops),
+        FlightQuery(date=option.return_date.isoformat(),
+                    from_airport=option.destination, to_airport=option.origin,
+                    max_stops=max_stops),
+    ]
+    return create_query(
+        flights=legs, trip="round-trip", seat="economy",
+        passengers=Passengers(adults=1), currency="USD", language="en",
+        max_price=cap,
+    ).url()
 
 
 @dataclass(frozen=True)
@@ -135,7 +172,10 @@ def verify(
         options = parse_options(dom, origin=origin, destination=destination,
                                 depart_date=t.depart, return_date=t.ret,
                                 deep_link=url)
-        usable = [o for o in options if o.visa_ok]
+        usable = [
+            replace(o, deep_link=booking_link(o, max_stops=max_stops))
+            for o in options if o.visa_ok
+        ]
         rejected = len(options) - len(usable)
         if options:
             log.info("Chrome %s %s -> %s +%dn: %d option(s), %d visa-rejected, "

@@ -230,3 +230,65 @@ class TestVerifiedFaresReachTheEmail:
                            is_great=False, generated_at="now",
                            verified=self._verified())
         assert "tfs=ZRH1" in html
+
+
+class TestBookingLink:
+    """Every verified fare must link to *that fare*, not a page of results.
+
+    Google's real booking URL encodes flight numbers, which only exist in
+    the DOM after a click that --dump-dom cannot perform. A price cap gets
+    to the same screen: measured on the $1,347 Zurich fare, the uncapped
+    search returned 13 options and the capped one returned exactly 1.
+    """
+
+    def _opt(self, price=1347):
+        from tracker.browser import BrowserOption
+        return BrowserOption(
+            price_usd=price, origin="SJO", destination="NRT",
+            depart_date=date(2027, 1, 29), return_date=date(2027, 2, 25),
+            stops=("ZRH",), airlines=("Edelweiss Air", "SWISS"),
+            total_minutes=2780)
+
+    def test_link_is_a_google_flights_url(self):
+        from tracker.verify import booking_link
+        assert booking_link(self._opt()).startswith(
+            "https://www.google.com/travel/flights/search?tfs=")
+
+    def test_link_forces_usd(self):
+        """Non-negotiable #4 reaches the link too, not just the search."""
+        from tracker.verify import booking_link
+        assert "curr=USD" in booking_link(self._opt())
+
+    def test_cap_sits_just_above_the_found_price(self):
+        from tracker.verify import booking_link
+        from fast_flights.pb.flights_pb2 import Info
+        import base64, urllib.parse
+        url = booking_link(self._opt(1347))
+        tfs = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["tfs"][0]
+        info = Info()
+        info.ParseFromString(base64.b64decode(tfs + "=" * (-len(tfs) % 4)))
+        assert 1347 < info.max_price <= 1347 * 1.2
+
+    def test_cap_scales_with_price(self):
+        from tracker.verify import booking_link
+        assert booking_link(self._opt(1000)) != booking_link(self._opt(2000))
+
+    def test_dates_survive_into_the_link(self):
+        from tracker.verify import booking_link
+        from fast_flights.pb.flights_pb2 import Info
+        import base64, urllib.parse
+        url = booking_link(self._opt())
+        tfs = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["tfs"][0]
+        info = Info()
+        info.ParseFromString(base64.b64decode(tfs + "=" * (-len(tfs) % 4)))
+        assert [d.date for d in info.data] == ["2027-01-29", "2027-02-25"]
+
+    def test_verify_attaches_the_capped_link_not_the_search_url(self, dom):
+        """Regression: options used to carry the plain search URL."""
+        from tracker.verify import verify, choose_targets
+        got = verify(choose_targets(hint_keys=[key("2027-01-29", "2027-02-25")],
+                                    today=TODAY), fetch=FakeChrome(dom))
+        assert got, "expected at least one visa-free option"
+        for o in got:
+            assert o.deep_link.startswith("https://www.google.com/travel/flights/search?tfs=")
+            assert "curr=USD" in o.deep_link
