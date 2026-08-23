@@ -166,6 +166,27 @@ to 24% in minutes. Enforced by `gate.py`; see the section below.
 **3. Rate.** It matters, but less than the two above. At a 10s delay the
 sweep is ~360 requests/hour, and it ran cleanly at 87% for hours at 6s.
 
+**4. Bursts, and a perfectly regular cadence.** Added 2026-08-23, found by
+reading `tracker.log` rather than by reasoning. The sweep jitters every wait
+and `search.Searcher` jitters too - but `monthly.scan_months`, the wide net,
+had no delay and no jitter *at all*. It fired every probe back to back as
+fast as Google answered:
+
+    15:45:01 ... 15:45:38   24 requests in 37 seconds, ~1.5s apart
+
+That was the most machine-shaped traffic in the project, on the one path
+that runs on every scheduled run, six times a day. It is now paced by
+`monthly_scan_delay_seconds` (3.0) with the same jitter as everywhere else.
+
+The same audit found the count misreported: `cli.py` logged the *month*
+count as the request count, so "Wide net: 8 request(s)" actually meant 24.
+With `monthly_scan_halves` on that understated the daily footprint by 96
+requests. `monthly.probe_count` now reports what is really sent.
+
+The lesson generalises: **every new path that reaches Google needs pacing
+and jitter, not just the lock.** Taking `gate.google()` only stops two
+callers overlapping; it says nothing about how fast one of them goes.
+
 **Do not diagnose a throttle by making more requests.** That was the
 mistake that turned a short throttle into an hour of one: each diagnostic
 probe was itself another request to a host already refusing. When the

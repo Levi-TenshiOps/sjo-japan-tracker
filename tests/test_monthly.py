@@ -100,32 +100,32 @@ class FakeFetch:
 class TestScanMonths:
     def test_one_request_per_month_and_hints_come_back(self):
         f = FakeFetch({"February 2027": WITH_YEAR, "October 2026": NO_YEAR})
-        hints = scan_months(f, [("October 2026", 2026), ("February 2027", 2027)])
+        hints = scan_months(f, [("October 2026", 2026), ("February 2027", 2027)], delay_s=0)
         assert len(f.queries) == 2
         assert [h.price_usd for h in hints] == [1604, 1347]
 
     def test_a_month_without_a_hint_is_skipped_quietly(self):
         f = FakeFetch({"March 2027": NO_HINT, "February 2027": WITH_YEAR})
-        hints = scan_months(f, [("March 2027", 2027), ("February 2027", 2027)])
+        hints = scan_months(f, [("March 2027", 2027), ("February 2027", 2027)], delay_s=0)
         assert [h.month for h in hints] == ["February 2027"]
 
     def test_a_failing_month_does_not_abort_the_sweep(self):
         """Five of eight months returned nothing on the first real pass."""
         f = FakeFetch({"January 2027": RuntimeError("boom"),
                        "February 2027": WITH_YEAR})
-        hints = scan_months(f, [("January 2027", 2027), ("February 2027", 2027)])
+        hints = scan_months(f, [("January 2027", 2027), ("February 2027", 2027)], delay_s=0)
         assert len(hints) == 1
 
     def test_nights_outside_the_trip_range_are_filtered(self):
         f = FakeFetch({"October 2026": NO_YEAR})       # 30 nights
-        assert scan_months(f, [("October 2026", 2026)], max_nights=28) == []
-        assert scan_months(f, [("October 2026", 2026)], min_nights=31) == []
+        assert scan_months(f, [("October 2026", 2026)], max_nights=28, delay_s=0) == []
+        assert scan_months(f, [("October 2026", 2026)], min_nights=31, delay_s=0) == []
         assert len(scan_months(f, [("October 2026", 2026)],
-                               min_nights=21, max_nights=31)) == 1
+                               min_nights=21, max_nights=31, delay_s=0)) == 1
 
     def test_query_names_origin_and_destination(self):
         f = FakeFetch({})
-        scan_months(f, [("May 2027", 2027)], origin="SJO", destination="HND")
+        scan_months(f, [("May 2027", 2027)], origin="SJO", destination="HND", delay_s=0)
         assert f.queries == ["Flights from SJO to HND in May 2027"]
 
     def test_keys_are_ordered_cheapest_first(self):
@@ -228,12 +228,12 @@ class TestMonthHalves:
 
     def test_scan_without_halves_asks_once_per_month(self):
         f = FakeFetch({})
-        scan_months(f, [("March 2027", 2027)], halves=False)
+        scan_months(f, [("March 2027", 2027)], halves=False, delay_s=0)
         assert len(f.queries) == 1
 
     def test_scan_with_halves_asks_three_times(self):
         f = FakeFetch({})
-        scan_months(f, [("March 2027", 2027)], halves=True)
+        scan_months(f, [("March 2027", 2027)], halves=True, delay_s=0)
         assert len(f.queries) == 3
         assert "in March 2027" in f.queries[0]
         assert "March 1 to March 15 2027" in f.queries[1]
@@ -241,7 +241,7 @@ class TestMonthHalves:
     def test_a_window_repeated_across_probes_is_reported_once(self):
         """Halves usually echo the month's own answer; do not double-count."""
         f = FakeFetch({"March": WITH_YEAR})
-        hints = scan_months(f, [("March 2027", 2027)], halves=True)
+        hints = scan_months(f, [("March 2027", 2027)], halves=True, delay_s=0)
         assert len(hints) == 1
 
 
@@ -331,3 +331,71 @@ class TestTheMonthLedger:
     def test_an_empty_ledger_says_so(self):
         assert monthly.format_ledger({"months": {}}) == [
             "No month hints recorded yet."]
+
+
+class TestTheWideNetIsPaced:
+    """It must not fire 24 requests as fast as the network answers.
+
+    Found 2026-08-23 by reading tracker.log: the 15:45 run sent 24 probes in
+    37 seconds at a near-perfect 1.5s cadence, because `scan_months` had no
+    delay and no jitter at all. The grid jitters and the sweep jitters; this
+    - the one path that runs on every scheduled run, six times a day - did
+    neither, making it the most machine-shaped traffic in the project.
+    """
+
+    def months(self, n=3):
+        return [("January 2027", 2027), ("February 2027", 2027),
+                ("March 2027", 2027)][:n]
+
+    def test_it_waits_between_probes(self):
+        naps = []
+        monthly.scan_months(lambda q: "", self.months(3), sleep=naps.append,
+                            delay_s=3.0, jitter_s=2.0)
+        assert len(naps) == 2, "one wait between each pair, none before the first"
+        assert all(3.0 <= n <= 5.0 for n in naps), naps
+
+    def test_the_wait_is_not_a_metronome(self):
+        """A perfectly regular cadence is a fingerprint."""
+        naps = []
+        months = [(f"Month {i} 2027", 2027) for i in range(30)]
+        monthly.scan_months(lambda q: "", months, sleep=naps.append,
+                            delay_s=3.0, jitter_s=2.0)
+        assert len(set(naps)) > 1, "every wait identical is exactly the problem"
+
+    def test_halves_are_paced_too(self):
+        """Halves triple the request count, so they matter most here."""
+        naps = []
+        monthly.scan_months(lambda q: "", self.months(2), halves=True,
+                            sleep=naps.append, delay_s=3.0, jitter_s=0.0)
+        # 2 whole-month probes + 4 half-month probes = 6, so 5 waits.
+        assert len(naps) == 5, naps
+
+    def test_a_failing_probe_still_paces_the_next(self):
+        """Errors must not turn into an unthrottled retry storm."""
+        naps = []
+
+        def boom(query):
+            raise RuntimeError("network")
+
+        monthly.scan_months(boom, self.months(3), sleep=naps.append,
+                            delay_s=3.0, jitter_s=0.0)
+        assert len(naps) == 2
+
+    def test_pacing_can_be_switched_off_for_tests(self):
+        naps = []
+        monthly.scan_months(lambda q: "", self.months(3), sleep=naps.append,
+                            delay_s=0.0)
+        assert naps == []
+
+
+class TestTheRequestCountIsReportedHonestly:
+    def test_halves_triple_the_probe_count(self):
+        """`cli.py` reported the month count as the request count.
+
+        With halves on that is 8 reported against 24 sent, six times a day -
+        a 96-request-a-day gap in the number the throttle notes reason from.
+        """
+        months = monthly.months_in_window(Date(2026, 9, 13), Date(2027, 4, 23))
+        assert len(months) == 8
+        assert len(monthly.probe_count(months)) == 8
+        assert len(monthly.probe_count(months, halves=True)) == 24

@@ -38,8 +38,10 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import date as Date
 from datetime import datetime, timezone
@@ -175,6 +177,9 @@ def scan_months(
     min_nights: int | None = None,
     max_nights: int | None = None,
     halves: bool = False,
+    delay_s: float = 3.0,
+    jitter_s: float = 2.0,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> list[MonthHint]:
     """One request per month; returns whatever hints came back.
 
@@ -182,6 +187,16 @@ def scan_months(
     fake and never touch the network. A month that raises or returns nothing
     is skipped rather than aborting the sweep — a wide net with a hole in it
     still beats no net.
+
+    Paced, because it was not. Until 2026-08-23 this loop fired every probe
+    back to back as fast as the network answered: with `halves` on that is
+    24 requests in 37 seconds at a near-perfect 1.5s cadence, which is the
+    most datacenter-shaped traffic in the whole project. The grid jitters
+    (`search.Searcher`) and the sweep jitters, and this - the one path that
+    runs on every scheduled run, six times a day - did neither.
+
+    Nobody browses like a metronome, so the wait is jittered rather than
+    fixed, for the same reason it is in the sweep.
     """
     probes = [(f"in {label}", label, year) for label, year in months]
     if halves:
@@ -189,7 +204,9 @@ def scan_months(
 
     hints: list[MonthHint] = []
     seen_windows: set[str] = set()
-    for fragment, label, year in probes:
+    for n, (fragment, label, year) in enumerate(probes):
+        if n and delay_s > 0:
+            sleep(delay_s + random.uniform(0, max(jitter_s, 0.0)))
         query = f"Flights from {origin} to {destination} {fragment}"
         try:
             html = fetch(query)
@@ -342,3 +359,18 @@ def format_ledger(ledger: dict, *, threshold: int | None = None) -> list[str]:
             f"{row.get('best_depart','')} -> {row.get('best_ret','')} "
             f"({hits}/{asks} answered){flag}")
     return lines
+
+
+def probe_count(months: Sequence[tuple[str, int]], *,
+                halves: bool = False) -> list:
+    """Every probe `scan_months` would send for these months.
+
+    Exists because `cli.py` reported the *month* count as the request count.
+    With `halves` on that is 8 reported against 24 actually sent, six times
+    a day - a 96-request-a-day gap in the one number the throttle notes are
+    reasoned from.
+    """
+    probes = [(f"in {label}", label, year) for label, year in months]
+    if halves:
+        probes += month_halves(months)
+    return probes

@@ -238,9 +238,14 @@ def run(argv: list[str] | None = None) -> int:
                 min_nights=min(nights) if nights else None,
                 max_nights=max(nights) if nights else None,
                 halves=cfg.monthly_scan_halves,
+                delay_s=cfg.monthly_scan_delay_seconds,
             )
         months_asked = monthly.months_in_window(early, late)
-        asked = len(months_asked)
+        # The real probe count, not the month count. With `halves` on the
+        # net sends 8 whole-month queries plus 16 half-month ones, and this
+        # line reported "8 requests" for all 24 of them - which quietly
+        # understated the project's daily footprint by 96 requests.
+        asked = len(monthly.probe_count(months_asked, halves=cfg.monthly_scan_halves))
         for h in month_hints:
             log.info("Month hint  %s", h.describe())
         # Keep them. The hints are the only price data this project has for

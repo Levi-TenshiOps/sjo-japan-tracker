@@ -127,6 +127,10 @@ class Config:
     # wide net had been asking about every one of them six times a day and
     # discarding the answers.
     month_ledger: str = "month_hints.json"
+    # The wide net used to fire all 24 probes back to back - the
+    # burstiest, most machine-shaped traffic in the project, on the one
+    # path that runs six times a day. Paced and jittered now.
+    monthly_scan_delay_seconds: float = 3.0
     # One process queries Google at a time. The sweep runs continuously and
     # the scheduled tracker six times a day, so without this they overlap
     # roughly every four hours - and the symptom is silence, not an error.
