@@ -65,15 +65,21 @@ def ask_weeks(prompt: str, default: str) -> list[int]:
             print(f"  {exc}")
 
 
-def ask_months(prompt: str, default: str) -> list[int]:
+def ask_months(prompt: str, default: str, *, limit: int | None = None) -> list[int]:
+    """A list of month numbers. `limit` caps how many may be picked.
+
+    The cap belongs to the *priority* list, where more than three months
+    drops each month's reserved share below one result row. The list of
+    months to search has no such limit - one or twelve are both sensible.
+    """
     while True:
         try:
             months = parse_months(ask(prompt, default, allow_blank=True))
         except PreferencesError as exc:
             print(f"     {exc}")
             continue
-        if len(set(months)) > MAX_PRIORITY_MONTHS:
-            print(f"     Pick at most {MAX_PRIORITY_MONTHS} months - beyond "
+        if limit is not None and len(set(months)) > limit:
+            print(f"     Pick at most {limit} months - beyond "
                   f"that the reserved share is under one result row each.")
             continue
         return months
@@ -116,15 +122,44 @@ def main() -> int:
     prefs.min_lead_days = ask_int(
         "     Ignore departures sooner than N days", prefs.min_lead_days, 0, 120)
 
+    print("\n     Which months should it actually search?")
+    print("     Leave blank for every month in that horizon. Name months and")
+    print("     ONLY those are searched - the horizon above then just decides")
+    print("     which year each one falls in.")
+    print("     Any number of months: 'October, November, December' or '1,2,3'.")
+    prefs.included_months = ask_months(
+        "     Months to search",
+        ",".join(MONTH_NAMES[m] for m in prefs.included_months))
+    if prefs.included_months:
+        missed = prefs.unreachable_months()
+        if missed:
+            print(f"     NOTE: {', '.join(MONTH_NAMES[m] for m in missed)} "
+                  f"is outside a {prefs.search_months}-month horizon and would")
+            print("     search nothing at all. Raise the horizon or drop it.")
+
     # -- 3. priority months ---------------------------------------------------
     print("\n  3. Any months to focus on?")
     print("     These are searched harder and are guaranteed a share of the")
     print("     results, so a cheap month elsewhere cannot crowd them out.")
     print("     Accepts 'January, February, March' or 'jan feb mar' or '1,2,3'.")
     print("     Pick 1 to 3 months, or blank for no preference.")
-    prefs.priority_months = ask_months(
-        "     Priority months",
-        ",".join(MONTH_NAMES[m] for m in prefs.priority_months))
+    if prefs.included_months:
+        # Priority is a subset of what is searched, so say so here rather
+        # than failing validation after every other question is answered.
+        names = ", ".join(MONTH_NAMES[m] for m in sorted(prefs.included_months))
+        print(f"     Must be among the months you chose to search: {names}.")
+    while True:
+        prefs.priority_months = ask_months(
+            "     Priority months",
+            ",".join(MONTH_NAMES[m] for m in prefs.priority_months),
+            limit=MAX_PRIORITY_MONTHS)
+        if not prefs.included_months:
+            break
+        orphan = set(prefs.priority_months) - set(prefs.included_months)
+        if not orphan:
+            break
+        print(f"     {', '.join(MONTH_NAMES[m] for m in sorted(orphan))} "
+              f"is not being searched, so it cannot be a priority.")
     if prefs.priority_months:
         pct = ask_int("     Minimum % of results from those months",
                       int(prefs.priority_share * 100), 0, 100)

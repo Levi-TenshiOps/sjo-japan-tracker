@@ -86,16 +86,32 @@ class Preferences:
     priority_share: float = 0.5      # minimum fraction of results from them
     result_count: int = 20           # how many options the email ranks
 
-    # Calendar months to leave out of the search entirely (1 = January).
-    # Every window departing in one of these is never generated, so it costs
-    # no request and cannot appear in the email.
+    # The months to search, as numbers (1 = January). This is the primary
+    # control over what gets searched: leave it empty and every month inside
+    # the horizon is searched, or name months and *only* those are.
     #
-    # This exists because the alternative - pinning `earliest_departure` and
-    # `latest_departure` to cut a month off the front - silently switches the
-    # search window from rolling to fixed (`Preferences.rolling`), so the
-    # 8-month horizon would stop moving forward and quietly go stale.
+    # `search_months` is then just the horizon - how far ahead to look for
+    # the months named here - not the definition of the search itself. That
+    # distinction matters: with a bare 8-month horizon the trip owner was
+    # getting April purely because it was the tail of the window, not
+    # because anyone wanted an April trip.
     #
-    # Excluding a month is a real reduction in coverage. It is the trip
+    # The count is free: one month or twelve. Each named month resolves to
+    # its next occurrence inside the horizon, so a month the horizon cannot
+    # reach contributes nothing - `unreachable_months` reports that rather
+    # than letting it fail silently.
+    included_months: list[int] = field(default_factory=list)
+
+    # Months to drop, applied after `included_months`. Kept as the inverse
+    # spelling for the case where naming what to skip is shorter than naming
+    # what to keep.
+    #
+    # Neither of these is implemented by pinning `earliest_departure` and
+    # `latest_departure`, because pinning both silently switches the search
+    # window from rolling to fixed (`Preferences.is_rolling`) and the horizon
+    # would stop moving forward and quietly go stale.
+    #
+    # Narrowing the months is a real reduction in coverage. It is the trip
     # owner's call, not an optimisation to apply on their behalf.
     excluded_months: list[int] = field(default_factory=list)
 
@@ -140,9 +156,23 @@ class Preferences:
                 f"(got {len(set(self.priority_months))}); more than that and "
                 f"each month's reserved share drops below a single result row"
             )
+        for m in self.included_months:
+            if not (1 <= int(m) <= 12):
+                raise PreferencesError(f"{m} is not a month number (1-12)")
         for m in self.excluded_months:
             if not (1 <= int(m) <= 12):
                 raise PreferencesError(f"{m} is not a month number (1-12)")
+        if self.included_months:
+            orphan = set(self.priority_months) - set(self.included_months)
+            if orphan:
+                raise PreferencesError(
+                    f"priority month(s) {sorted(orphan)} are not in "
+                    f"included_months; a month cannot be searched harder and "
+                    f"not at all"
+                )
+            if set(self.included_months) <= set(self.excluded_months):
+                raise PreferencesError(
+                    "every included month is also excluded; nothing to search")
         clash = set(self.excluded_months) & set(self.priority_months)
         if clash:
             raise PreferencesError(
@@ -203,7 +233,42 @@ class Preferences:
         return d.month in set(self.priority_months)
 
     def is_excluded_month(self, d: Date) -> bool:
+        """True when this departure date's month is not being searched."""
+        if self.included_months and d.month not in set(self.included_months):
+            return True
         return d.month in set(self.excluded_months)
+
+    def searched_months(self, today: Date | None = None) -> list[tuple[int, int]]:
+        """(year, month) actually searched, in the order the sweep walks them."""
+        early, late = self.window_on(today)
+        early = max(early, (today or Date.today())
+                    + timedelta(days=self.min_lead_days))
+        out, y, m = [], early.year, early.month
+        while (y, m) <= (late.year, late.month):
+            if not self.is_excluded_month(Date(y, m, 1)):
+                out.append((y, m))
+            m += 1
+            if m == 13:
+                m, y = 1, y + 1
+        return out
+
+    def unreachable_months(self, today: Date | None = None) -> list[int]:
+        """Named months the horizon never reaches, so they search nothing.
+
+        A silent miss here looks exactly like a month with no cheap fares,
+        which is the worst possible failure mode for this project.
+        """
+        if not self.included_months:
+            return []
+        reachable = {m for _y, m in self.searched_months(today)}
+        return sorted(set(self.included_months) - reachable)
+
+    @property
+    def included_label(self) -> str:
+        if not self.included_months:
+            return "every month in the horizon"
+        return ", ".join(MONTH_NAMES[int(m)]
+                         for m in sorted(set(self.included_months)))
 
     @property
     def excluded_label(self) -> str:
@@ -251,19 +316,32 @@ class Preferences:
             flex += ("  [%s dropped: past the %dn max-stay rule]"
                      % (", ".join(f"{n}n" for n in self.dropped_nights),
                         MAX_STAY_NIGHTS))
-        span = (
-            f"next {self.search_months} months ({early} to {late})"
-            if self.is_rolling else f"{early} to {late} (pinned)"
-        )
+        # When months are named they *are* the search, so say that rather
+        # than describing a horizon the trip owner did not ask for. The
+        # horizon still appears in brackets, because it is what decides
+        # which year each month resolves to.
+        months = self.searched_months(today)
+        if self.included_months:
+            named = ", ".join(f"{MONTH_NAMES[m]} {y}" for y, m in months)
+            span = f"{named}  (looking up to {self.search_months} months ahead)"
+        else:
+            span = (
+                f"next {self.search_months} months ({early} to {late})"
+                if self.is_rolling else f"{early} to {late} (pinned)"
+            )
         pct = int(self.priority_share * 100)
+        missed = self.unreachable_months(today)
         return (
-            f"Depart in the {span}, sampled every {self.departure_step_days}d\n"
+            f"Depart in {span}, sampled every {self.departure_step_days}d\n"
             f"  Trip lengths : {weeks}{flex}\n"
             f"  Priority     : {self.priority_label} "
             f"(at least {pct}% of the {self.result_count} results)\n"
             + (f"  Excluded     : {self.excluded_label} "
                f"(never searched, never emailed)\n"
                if self.excluded_months else "")
+            + (f"  NOT REACHED  : {', '.join(MONTH_NAMES[m] for m in missed)} "
+               f"- outside the {self.search_months}-month horizon, so nothing "
+               f"is searched there\n" if missed else "")
             + f"  Destinations : {', '.join(self.destinations)}\n"
             f"  Alert under  : ${self.good_price_usd:,} "
             f"(standout ${self.great_price_usd:,})"

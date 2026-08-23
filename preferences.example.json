@@ -12,6 +12,8 @@
   ],
   "priority_share": 0.5,
   "result_count": 20,
+  "included_months": [],
+  "excluded_months": [],
   "trip_weeks": [
     2,
     3,

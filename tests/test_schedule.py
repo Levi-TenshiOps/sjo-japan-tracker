@@ -364,3 +364,108 @@ class TestExcludedMonths:
 
     def test_status_stays_quiet_when_nothing_is_excluded(self):
         assert "Excluded" not in self.prefs().describe(today=date(2026, 8, 23))
+
+
+class TestIncludedMonths:
+    """Naming months makes them the search, rather than a filter on it.
+
+    Added 2026-08-23. The trip owner asked why April was being searched; the
+    answer was that nobody had chosen it - it was simply the tail of an
+    8-month rolling horizon. `search_months` is now only the horizon, i.e.
+    how far ahead to look for the months actually named.
+    """
+
+    def prefs(self, included=(), excluded=(), priority=(1, 2, 3), horizon=8):
+        return Preferences(
+            alert_email="a@b.c", search_months=horizon, min_lead_days=21,
+            departure_step_days=1, trip_weeks=[3, 4], extra_nights=[],
+            destinations=["TYO"], priority_months=list(priority),
+            included_months=list(included), excluded_months=list(excluded))
+
+    def test_only_the_named_months_are_searched(self):
+        p = self.prefs(included=[1, 2, 3, 10, 11, 12])
+        ws = generate_windows(p, today=date(2026, 8, 23))
+        assert {w.depart.month for w in ws} == {1, 2, 3, 10, 11, 12}
+
+    def test_the_trip_owners_six_months_in_order(self):
+        """The exact configuration in use."""
+        p = self.prefs(included=[1, 2, 3, 10, 11, 12])
+        assert p.searched_months(today=date(2026, 8, 23)) == [
+            (2026, 10), (2026, 11), (2026, 12),
+            (2027, 1), (2027, 2), (2027, 3)]
+
+    def test_april_is_gone(self):
+        """It was only ever there as the tail of the horizon."""
+        ws = generate_windows(self.prefs(included=[1, 2, 3, 10, 11, 12]),
+                              today=date(2026, 8, 23))
+        assert not any(w.depart.month == 4 for w in ws)
+
+    def test_one_month_is_a_valid_search(self):
+        """'it can be 1, 6 or any number we want'."""
+        p = self.prefs(included=[2], priority=[2])
+        ws = generate_windows(p, today=date(2026, 8, 23))
+        assert ws and {w.depart.month for w in ws} == {2}
+
+    def test_empty_means_every_month_as_before(self):
+        a = generate_windows(self.prefs(), today=date(2026, 8, 23))
+        b = generate_windows(self.prefs(included=[]), today=date(2026, 8, 23))
+        assert {w.key for w in a} == {w.key for w in b}
+
+    def test_exclusion_still_applies_on_top(self):
+        p = self.prefs(included=[1, 2, 3, 10, 11, 12], excluded=[11])
+        ws = generate_windows(p, today=date(2026, 8, 23))
+        assert {w.depart.month for w in ws} == {1, 2, 3, 10, 12}
+
+    def test_the_window_stays_rolling(self):
+        assert self.prefs(included=[1, 2, 3]).is_rolling
+
+    def test_a_priority_month_must_be_searched(self):
+        with pytest.raises(PreferencesError, match="not in included_months"):
+            self.prefs(included=[10, 11, 12], priority=[1, 2, 3]).validate()
+
+    def test_excluding_everything_included_is_refused(self):
+        with pytest.raises(PreferencesError, match="nothing to search"):
+            self.prefs(included=[10], excluded=[10], priority=[]).validate()
+
+    def test_a_nonsense_month_number_is_refused(self):
+        with pytest.raises(PreferencesError, match="not a month number"):
+            self.prefs(included=[0]).validate()
+
+
+class TestAMonthTheHorizonCannotReach:
+    """Silently searching nothing is the worst failure mode here.
+
+    A named month outside the horizon produces no windows, which looks
+    exactly like a month with no cheap fares. It has to be reported.
+    """
+
+    def prefs(self, included, horizon=8):
+        return Preferences(
+            alert_email="a@b.c", search_months=horizon, min_lead_days=21,
+            departure_step_days=1, trip_weeks=[3], extra_nights=[],
+            destinations=["TYO"], priority_months=[],
+            included_months=list(included))
+
+    def test_it_is_reported(self):
+        """From August, an 8-month horizon reaches only to April."""
+        p = self.prefs([1, 6])
+        assert p.unreachable_months(today=date(2026, 8, 23)) == [6]
+
+    def test_reachable_months_are_not_reported(self):
+        p = self.prefs([1, 2, 3, 10, 11, 12])
+        assert p.unreachable_months(today=date(2026, 8, 23)) == []
+
+    def test_a_longer_horizon_reaches_it(self):
+        p = self.prefs([1, 6], horizon=12)
+        assert p.unreachable_months(today=date(2026, 8, 23)) == []
+
+    def test_status_shouts_about_it(self):
+        text = self.prefs([1, 6]).describe(today=date(2026, 8, 23))
+        assert "NOT REACHED" in text and "June" in text
+
+    def test_status_stays_quiet_when_all_are_reachable(self):
+        text = self.prefs([1, 2, 3]).describe(today=date(2026, 8, 23))
+        assert "NOT REACHED" not in text
+
+    def test_nothing_named_means_nothing_unreachable(self):
+        assert self.prefs([]).unreachable_months(today=date(2026, 8, 23)) == []

@@ -167,28 +167,47 @@ And the cold half is not optional - chasing only known bargains would never
 notice a new one appearing somewhere cold. A window that has never been
 priced is always taken when the cursor reaches it, for the same reason.
 
-## Months can be excluded, and September is
+## The months searched are named, not a side-effect of the horizon
 
-The trip owner ruled September out on 2026-08-23. `excluded_months: [9]` in
-`preferences.json`; no window departing in an excluded month is ever
-generated, so it costs no request and cannot reach the email.
+`included_months: [1, 2, 3, 10, 11, 12]`. Only those six are searched.
 
-Do not implement this by pinning `earliest_departure`/`latest_departure` to
-cut a month off the front. That silently switches the search window from
-rolling to fixed (`Preferences.is_rolling`), so the 8-month horizon stops
-moving forward and quietly goes stale.
+This started as `excluded_months: [9]` to drop September, and the trip
+owner immediately found the flaw: "why April?" Nobody had chosen April. It
+was there because it was the tail of an 8-month rolling horizon, and
+September had been there for the same reason at the other end. Filtering
+the horizon meant the horizon was still deciding the search.
 
-It filters on the *departure* date. A trip leaving in October and returning
-in November is an October trip; excluding November must not delete it.
+So `search_months` is now **only the horizon** - how far ahead to look for
+the months actually named - and `included_months` is the search. Any count
+works: one month or twelve. `excluded_months` remains as the inverse
+spelling, applied afterwards, for when naming what to skip is shorter.
 
-The resulting sweep order is exactly what was asked for, and falls out of
-`sweep_order` for free once September is gone - priority months first, then
-the rest in date order:
+Do not implement either by pinning `earliest_departure`/`latest_departure`.
+That silently switches the window from rolling to fixed
+(`Preferences.is_rolling`), so the horizon stops moving forward and quietly
+goes stale.
 
-    January -> February -> March -> October -> November -> December -> April
-      558        504        558       558        540        558       414
+Both filter on the *departure* date. A trip leaving in October and
+returning in November is an October trip; dropping November must not delete
+it.
 
-3,690 windows, down from 4,014.
+**A named month the horizon cannot reach searches nothing, and that looks
+exactly like a month with no cheap fares.** From August an 8-month horizon
+reaches only to April, so asking for June would silently find nothing.
+`unreachable_months` detects it, `--status` prints `NOT REACHED`, and the
+setup wizard warns at the point of asking.
+
+The sweep order then falls out of `sweep_order` for free - priority months
+first, then the rest in date order:
+
+    January -> February -> March -> October -> November -> December
+      558        504        558       558        540        558
+
+**3,276 windows, down from 4,014.** With the derived hot share that is a
+full exhaustive pass in 4.1 days at 90s, 2.1 days at 45s, 1.4 days at 30s.
+
+`setup_tracker.py` asks for this, so re-running setup no longer silently
+resets it to "every month" and brings April and September back.
 
 ## Raising the sweep rate
 
