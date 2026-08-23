@@ -151,6 +151,8 @@ class SweepStore:
     last_active: str = ""
     last_key: str = ""          # window key the cursor last finished
     found: dict = field(default_factory=dict)
+    recent: list = field(default_factory=list)   # 1 = empty, 0 = had fares
+    retry: list = field(default_factory=list)    # windows to re-walk later
 
     # -- persistence -------------------------------------------------------
     @classmethod
@@ -254,6 +256,30 @@ def sweep_order(windows: Sequence) -> list:
     return priority + rest
 
 
+# A window with no visa-free option is normal - measured, 13% of them are
+# genuinely all-US or all-Canada routings. A *run* of them is not. When
+# Google throttles, it answers in three seconds with an empty page, and the
+# sweep cannot tell that from "no fares here" - it records a false empty,
+# moves on, and does not look again for a whole pass.
+#
+# Measured 2026-08-23: pricing windows from a second process at the same
+# time took the hit rate from 87% to 24%, and the empty responses came back
+# in 3-4s against the 6s a real page takes.
+EMPTY_ALARM_WINDOW = 20        # judge over this many recent windows
+EMPTY_ALARM_RATE = 0.60        # above this, assume throttling rather than truth
+THROTTLE_BACKOFF = 4.0         # multiply the delay while it looks throttled
+SUSPECT_FAST_SECONDS = 4.5     # a genuine page has never come back this fast
+
+
+def looks_throttled(recent: Sequence[int], *, window: int = EMPTY_ALARM_WINDOW,
+                    rate: float = EMPTY_ALARM_RATE) -> bool:
+    """True when the recent empty rate is too high to be honest."""
+    sample = list(recent)[-window:]
+    if len(sample) < window:
+        return False
+    return (sum(sample) / len(sample)) > rate
+
+
 def resume_index(windows: Sequence, store: "SweepStore") -> int:
     """Where to carry on, by window rather than by position.
 
@@ -322,14 +348,28 @@ def sweep_batch(
             store.pass_started = _now()
             log.info("Sweep completed pass %d", store.passes_completed)
 
-        w = windows[store.cursor]
+        # Anything queued for a second look comes first: those are windows
+        # that answered empty while the sweep looked throttled, so their
+        # "no fares" verdict was never trustworthy.
+        if store.retry:
+            key = store.retry.pop(0)
+            w = next((x for x in windows if x.key == key), None)
+            if w is None:
+                continue
+            replay = True
+        else:
+            w = windows[store.cursor]
+            replay = False
+
         depart, ret = w.depart, w.back
         url = _search_url(origin, destination, depart, ret, max_stops)
+        started = time.monotonic()
         try:
             dom = grab(url)
         except Exception as exc:            # noqa: BLE001 - never die mid-sweep
             log.debug("sweep fetch failed for %s: %s", depart, exc)
             dom = ""
+        elapsed = time.monotonic() - started
 
         options = [o for o in parse_options(
             dom, origin=origin, destination=destination,
@@ -352,13 +392,36 @@ def sweep_batch(
                 except OSError as exc:
                     log.debug("could not log sweep rows: %s", exc)
 
-        store.last_key = w.key
-        store.cursor += 1
+        # Record whether this window came back empty, and re-queue it if the
+        # emptiness is suspicious - too fast to be a real page, or arriving
+        # in the middle of a run of them.
+        store.recent.append(0 if options else 1)
+        del store.recent[:-EMPTY_ALARM_WINDOW * 2]
+        throttled = looks_throttled(store.recent)
+        # One retry per window, never more: a genuinely empty window is fast
+        # *and* empty every time, so re-queueing on a replay would loop on it
+        # forever and the sweep would stop advancing.
+        if (not options and not replay
+                and (throttled or elapsed < SUSPECT_FAST_SECONDS)
+                and w.key not in store.retry):
+            store.retry.append(w.key)
+
+        if not replay:
+            store.last_key = w.key
+            store.cursor += 1
         store.windows_priced += 1
         store.last_active = _now()
         done += 1
-        if delay_s:
-            sleep(delay_s)
+
+        nap = delay_s * (THROTTLE_BACKOFF if throttled else 1.0)
+        if throttled:
+            log.warning("Empty rate %.0f%% over the last %d windows - backing "
+                        "off to %.0fs and re-queueing %d window(s)",
+                        100 * sum(store.recent[-EMPTY_ALARM_WINDOW:])
+                        / EMPTY_ALARM_WINDOW, EMPTY_ALARM_WINDOW,
+                        nap, len(store.retry))
+        if nap:
+            sleep(nap)
     return done
 
 

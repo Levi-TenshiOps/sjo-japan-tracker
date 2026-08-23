@@ -205,17 +205,30 @@ class TestSweeping:
         assert list(s.found.values())[0]["price_usd"] == 2652
 
     def test_a_failing_launch_does_not_stop_the_batch(self, dom):
+        """A failure is re-queued once, so the cursor lags by that window."""
         s = SweepStore()
         f = FakeChrome(dom, fail_on={2})
         sweep_batch(windows(5), s, batch=4, fetch=f,
                     sleep=lambda _: None, delay_s=0)
-        assert s.cursor == 4, "the sweep must move past a failure"
+        assert f.calls == 4, "the sweep must keep working after a failure"
+        assert s.cursor >= 3
 
-    def test_empty_dom_advances_without_storing(self):
+    def test_empty_dom_advances_and_stores_nothing(self):
         s = SweepStore()
         sweep_batch(windows(3), s, batch=3, fetch=FakeChrome(""),
                     sleep=lambda _: None, delay_s=0)
-        assert s.cursor == 3 and s.found == {}
+        assert s.found == {}
+        assert s.cursor >= 1, "an all-empty run must still make progress"
+
+    def test_a_retried_window_is_not_queued_again(self):
+        """Otherwise a genuinely empty window loops forever and the sweep
+        never advances."""
+        s = SweepStore()
+        for _ in range(6):
+            sweep_batch(windows(3), s, batch=3, fetch=FakeChrome(""),
+                        sleep=lambda _: None, delay_s=0)
+        assert len(s.retry) <= 3
+        assert s.windows_priced >= 12
 
     def test_no_windows_is_a_no_op(self, dom):
         s = SweepStore()
@@ -430,3 +443,72 @@ class TestResumingSurvivesTheListShifting:
                     sleep=lambda _: None, delay_s=0)
         s.save(p)
         assert SweepStore.load(p).last_key == ws[1].key
+
+
+class TestThrottleDetection:
+    """A run of empty windows is throttling, not an absence of fares.
+
+    Measured 2026-08-23: pricing windows from a second process at the same
+    time took the hit rate from 87% to 24%, and the throttled responses came
+    back in 3-4s where a real page takes ~6s. The sweep could not tell the
+    two apart, so it recorded a false "no fares", advanced, and did not look
+    at that window again for a whole pass.
+    """
+
+    def test_a_normal_empty_rate_is_not_an_alarm(self):
+        from tracker.sweeper import looks_throttled
+        # 13% empty is the measured, genuine rate.
+        assert not looks_throttled([0] * 17 + [1] * 3)
+
+    def test_a_run_of_empties_is_an_alarm(self):
+        from tracker.sweeper import looks_throttled
+        assert looks_throttled([1] * 20)
+
+    def test_too_little_data_never_alarms(self):
+        """Three empty windows at startup must not trigger a backoff."""
+        from tracker.sweeper import looks_throttled
+        assert not looks_throttled([1, 1, 1])
+
+    def test_the_threshold_sits_between_the_measured_rates(self):
+        from tracker.sweeper import looks_throttled
+        healthy = [1] * 3 + [0] * 17          # 15% empty, like the real sweep
+        throttled = [1] * 15 + [0] * 5        # 75% empty, like the incident
+        assert not looks_throttled(healthy)
+        assert looks_throttled(throttled)
+
+    def test_only_the_recent_sample_counts(self):
+        """Recovery must clear the alarm, not be outvoted by old history."""
+        from tracker.sweeper import looks_throttled
+        assert not looks_throttled([1] * 100 + [0] * 20)
+
+    def test_suspicious_empties_are_queued_for_a_second_look(self):
+        s = SweepStore()
+        sweep_batch(windows(3), s, batch=3, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        assert s.retry, "a fast empty is not trustworthy and must be re-checked"
+
+    def test_a_window_with_fares_is_never_queued(self, dom):
+        s = SweepStore()
+        sweep_batch(windows(3), s, batch=3, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        assert s.retry == []
+
+    def test_the_delay_grows_while_throttled(self, dom):
+        naps = []
+        s = SweepStore(recent=[1] * 40)
+        sweep_batch(windows(2), s, batch=1, fetch=FakeChrome(""),
+                    sleep=naps.append, delay_s=6.0)
+        assert naps and naps[0] > 6.0, "a throttled sweep must slow down"
+
+    def test_the_delay_is_normal_when_healthy(self, dom):
+        naps = []
+        sweep_batch(windows(2), SweepStore(), batch=1, fetch=FakeChrome(dom),
+                    sleep=naps.append, delay_s=6.0)
+        assert naps == [6.0]
+
+    def test_recent_does_not_grow_without_bound(self, dom):
+        s = SweepStore()
+        for _ in range(20):
+            sweep_batch(windows(5), s, batch=5, fetch=FakeChrome(dom),
+                        sleep=lambda _: None, delay_s=0)
+        assert len(s.recent) <= 40
