@@ -62,30 +62,30 @@ class TestNights:
     def test_zero_flex_is_exact(self):
         assert prefs(trip_weeks=[4]).nights_options == [28]
 
-    def test_six_weeks_is_dropped_not_searched(self):
-        """No round-trip fare exists past MAX_STAY_NIGHTS.
+    def test_long_stays_stay_searchable(self):
+        """The old 31-night cap was wrong and must not come back.
 
-        Measured live: 30n and 31n price fine, 32n and beyond return nothing
-        on every departure date. Searching them is a guaranteed empty.
+        It was inferred from 32n+ returning nothing on every date tried.
+        The trip owner then produced a real $1,390 Google result for a
+        32-night SJO-NRT round trip, so "returns nothing" turned out to be a
+        limit of HTML scraping, not proof that no fare exists. Capping on
+        that inference silently hid the one flight they wanted.
         """
-        p = prefs(trip_weeks=[2, 3, 4, 5])
-        p.trip_weeks = sorted(p.trip_weeks + [6])
-        p.validate()
-        assert 42 not in p.nights_options
-        assert 35 not in p.nights_options
-        assert p.dropped_nights == [35, 42]
-        assert p.nights_options == [14, 21, 28]
-
-    def test_extra_nights_reaches_the_max_stay_sweet_spot(self):
-        """30n is inside the rule and was materially cheaper than 28n."""
-        p = prefs(trip_weeks=[2, 3, 4], extra_nights=[30])
-        assert p.nights_options == [14, 21, 28, 30]
+        p = prefs(trip_weeks=[2, 3, 4, 5], extra_nights=[32])
+        assert 32 in p.nights_options
+        assert 35 in p.nights_options
         assert p.dropped_nights == []
 
-    def test_extra_nights_past_the_bound_is_also_dropped(self):
-        p = prefs(trip_weeks=[2], extra_nights=[30, 45])
+    def test_extra_nights_reaches_between_the_weeks(self):
+        """Whole weeks step over 30n, which priced cheaper than 28n live."""
+        p = prefs(trip_weeks=[2, 3, 4], extra_nights=[30])
+        assert p.nights_options == [14, 21, 28, 30]
+
+    def test_only_an_absurd_length_is_dropped(self):
+        """The bound exists to catch a typo, not to encode a fare rule."""
+        p = prefs(trip_weeks=[2], extra_nights=[30, 400])
         assert p.nights_options == [14, 30]
-        assert p.dropped_nights == [45]
+        assert p.dropped_nights == [400]
 
 
 class TestValidation:
@@ -165,5 +165,4 @@ class TestDefaults:
 
     def test_describe_is_readable(self):
         text = prefs().describe()
-        assert "14n, 21n, 28n" in text and "$1,380" in text
-        assert "35n dropped" in text, "an unsearchable length must be visible"
+        assert "14n, 21n, 28n, 35n" in text and "$1,380" in text

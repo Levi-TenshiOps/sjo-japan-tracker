@@ -29,17 +29,22 @@ MAX_SEARCH_MONTHS = 12
 # protect against. One to three months keeps the guarantee real.
 MAX_PRIORITY_MONTHS = 3
 
-# Round-trip economy fares on this route carry a maximum-stay rule. Measured
-# live on 2026-08-22, SJO-TYO departing 2026-11-10:
-#     28n -> 18 options ($1,805)   30n -> 16 options ($1,404)
-#     29n -> 16 options ($1,679)   31n ->  1 option  ($1,722)
-#     32n, 33n, 35n -> nothing at all, on every departure date tried.
-# So a 5-week (35n) round trip is not merely expensive, it does not exist as
-# a fare. Searching one is a guaranteed empty response, and with four trip
-# lengths that was a quarter of every run spent learning nothing. Nights
-# beyond this bound are dropped from the grid; a longer stay needs two
-# one-way tickets, which this tracker does not price.
-MAX_STAY_NIGHTS = 31
+# There is no reliable maximum-stay rule to encode here, and an earlier
+# attempt to encode one was wrong. Sampling on 2026-08-22 looked decisive:
+# from several departure dates, 19-30 nights returned 9-18 options each and
+# 31 nights upward returned nothing at all, every time. That is exactly the
+# shape of a 30-day max-stay fare rule, so it was taken for one.
+#
+# It is not. The trip owner produced a real Google Flights result for
+# SJO-NRT departing 2027-02-05 returning 2027-03-09 - 32 nights - at $1,390
+# on Edelweiss plus SWISS via Zurich. Re-querying windows that had returned
+# results an hour earlier then returned nothing, so "empty" is not a stable
+# property of a query and cannot be used to infer that a fare cannot exist.
+#
+# The cap is therefore deliberately loose: it exists only to stop a typo
+# like 400 weeks from generating a useless grid. Anything a traveller might
+# plausibly book must stay searchable.
+MAX_STAY_NIGHTS = 60
 
 MONTH_NAMES = {
     1: "January", 2: "February", 3: "March", 4: "April",

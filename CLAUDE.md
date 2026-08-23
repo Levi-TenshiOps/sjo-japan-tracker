@@ -116,21 +116,42 @@ catches `0.5 x min(1, D/(sweep/2))` — identical for short deals and strictly
 worse for long ones. Hence `departure_step_days: 1`. The hot list is what
 keeps a found deal fresh; the cold sweep only has to *discover* it.
 
-**Round-trip fares have a ~30-night maximum stay.** SJO-TYO from
-2026-11-10: 28n gave 18 options ($1,805), 29n gave 16 ($1,679), 30n gave 16
-($1,404), 31n gave 1 ($1,722), and 32n/33n/35n gave nothing at all — on
-every departure date tried. Two consequences. A 5-week round trip is not
-expensive, it does not exist, so searching it burnt a quarter of every run;
-`MAX_STAY_NIGHTS` now drops it. And the cheapest fares sit *just inside*
-the boundary, which whole-week trip lengths step straight over — that is
-what `extra_nights: [30]` is for.
+**There is no maximum-stay rule. That conclusion was wrong.** It looked
+airtight: from several departure dates, 19-30 nights each returned 9-18
+options and 31 nights upward returned nothing, every time, reproducibly.
+It was read as the standard 30-day max-stay fare rule and a
+`MAX_STAY_NIGHTS = 31` cap was added.
 
-**The measured effect of dropping 35n.** Two live runs, 26 requests each,
-same afternoon: before, 31 usable options and a 38% empty rate; after, 43
-usable options and 23%. Same request cost, 39% more usable fares, and the
-30-night length turned out to be the single most productive one (13 of the
-43 rows). That is the shape of the win — not more requests, fewer wasted
-ones.
+The trip owner then produced a live Google Flights result for SJO-NRT
+departing 2027-02-05, returning 2027-03-09 — **32 nights, $1,390**, on
+Edelweiss plus SWISS via Zurich. The fare exists. The cap had silently
+excluded the exact flight they were tracking.
+
+What is actually happening: **stays past ~30 nights are missing from the
+server-rendered HTML this project scrapes.** Fetching the trip owner's own
+URL — byte-identical `tfs`, same airports, no stop limit — returns a page
+with zero prices in it, while that same URL in a browser shows the $1,390
+fare. The plain-text query path cannot reach it either. Results are stable
+and reproducible (4/4 identical across spaced retries), so this is not
+throttling; it is a boundary in what Google renders without JavaScript.
+
+The lesson is bigger than the number: **an empty response never proves a
+fare does not exist.** It proves only that this fetch method did not see
+one. Never infer a fare rule from silence again. `MAX_STAY_NIGHTS` is now
+60 and exists only to stop a typo generating a useless grid.
+
+**The wide net beats the grid at finding fares.** `tracker/monthly.py`
+sends one plain-text query per month ("Flights from SJO to NRT in February
+2027") and reads Google's own recommendation out of the prose:
+
+    Travel Jan 29 - Feb 25, 2027 for $1,347
+
+Eight requests covered the whole window and named $1,663, $1,604, $1,432
+and $1,347 — while 26 grid requests the same afternoon bottomed out at
+$2,197. Three months in eight returned no hint, which is normal. The hint
+carries no routing, so it is a *candidate*: it goes to the front of the hot
+list and the ordinary search prices it, with `itinerary.validate()` still
+ruling on the visa. Use the grid to track a fare; use the net to find one.
 
 **SJO-OSA returns nothing, at any stop count.** Not a `max_stops` artefact:
 1, 2, 3 and unlimited stops all return zero on every date tried, while TYO

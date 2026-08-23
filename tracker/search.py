@@ -255,6 +255,22 @@ class _Fetched(list):
     raw_html: str = ""
 
 
+def fetch_text_query(query: str) -> str:
+    """Raw HTML for a plain-text Google Flights query.
+
+    Deliberately separate from `_default_fetch`: that one parses an
+    itinerary list, while the monthly wide net wants the page itself so it
+    can read the "Travel A - B for $P" recommendation out of the prose.
+    Returns "" on any failure, because a missing month is a hole in the net
+    and not a reason to abandon the run.
+    """
+    try:
+        return fetch_flights_html(query) or ""
+    except Exception as exc:            # noqa: BLE001 - deliberately broad
+        log.debug("text query %r failed: %s", query, exc)
+        return ""
+
+
 def _default_fetch(query):
     """Fetch and parse one search, failing soft on an unfamiliar payload.
 

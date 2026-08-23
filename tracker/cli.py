@@ -11,12 +11,12 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from . import (
-    alerts, config as config_mod, email_render, history, notify, pricing,
-    ranking, schedule, throttle,
+    alerts, config as config_mod, email_render, history, monthly, notify,
+    pricing, ranking, schedule, throttle,
 )
 from .itinerary import Itinerary, dedupe, format_price, partition
 from .preferences import Preferences, PreferencesError
-from .search import Searcher, plan_broad, plan_hub_sweep
+from .search import Searcher, fetch_text_query, plan_broad, plan_hub_sweep
 
 CR_TZ = ZoneInfo("America/Costa_Rica")
 log = logging.getLogger("tracker")
@@ -181,6 +181,32 @@ def run(argv: list[str] | None = None) -> int:
 
     rows = [] if args.no_history else _read_rows(cfg.history_csv)
     hot = schedule.hot_keys_from_history(rows, limit=cfg.hot_list_size)
+
+    # The wide net. One text query per month asks Google for its own cheapest
+    # dates, which finds in ~8 requests what the date grid needs a fortnight
+    # to reach. The hints are unverified candidates: they carry no routing,
+    # so they are pushed onto the *front* of the hot list and priced by the
+    # ordinary search, where itinerary.validate() still rules on the visa.
+    month_hints: list = []
+    if cfg.monthly_scan and not args.status:
+        early, late = prefs.window_on(None)
+        nights = prefs.nights_options
+        month_hints = monthly.scan_months(
+            fetch_text_query,
+            monthly.months_in_window(early, late),
+            destination=cfg.monthly_scan_destination,
+            origin=cfg.origins[0],
+            min_nights=min(nights) if nights else None,
+            max_nights=max(nights) if nights else None,
+        )
+        for h in month_hints:
+            log.info("Month hint  %s", h.describe())
+        if month_hints:
+            keys = monthly.hint_window_keys(month_hints)
+            hot = keys + [k for k in hot if k not in set(keys)]
+            log.info("Wide net: %d hint(s) from %d request(s); cheapest $%s",
+                     len(month_hints), len(monthly.months_in_window(early, late)),
+                     f"{min(h.price_usd for h in month_hints):,}")
 
     # The window plan must not claim the whole budget when the hub sweep is
     # enabled, or the sweep never gets a single request and the config flag

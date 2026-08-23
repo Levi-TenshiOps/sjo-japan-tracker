@@ -9,10 +9,18 @@ Picks the right mechanism for the machine:
           after downtime. Falls back to plain cron if systemd is absent.
 * Windows prints the schtasks command to run.
 
-Default is four runs a day. That is a deliberate choice, not a compromise:
-the blocking risk is driven by *requests*, and four small runs make fewer
-requests than two large ones while re-checking the cheapest fares twice as
-often. See README, "How often should this run".
+Default is six runs a day, the maximum `spread_hours` will place. Blocking
+risk is driven by *requests*, not by how many times the job wakes up, and
+several small runs make fewer requests than a few large ones while
+re-checking the cheapest fares more often. Six was chosen over four because
+the departure grid now prices every day in the window: at four runs the
+cold pool needed ~19 days to come round, which is a long time to discover a
+new fare. Six brings that down without raising the per-run budget.
+
+The last run lands at 21:00, deliberately after `last_call_hour` (20:00),
+so the held second email of the day still has a run to go out on. Moving
+LAST_HOUR earlier than `last_call_hour` would strand it.
+See README, "How often should this run".
 """
 
 from __future__ import annotations
@@ -221,8 +229,8 @@ def print_windows(hours: list[int], root: Path) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Install the tracker as a recurring job.")
-    parser.add_argument("--runs", type=int, default=4, choices=range(1, 7),
-                        metavar="1-6", help="runs per day (default 4)")
+    parser.add_argument("--runs", type=int, default=6, choices=range(1, 7),
+                        metavar="1-6", help="runs per day (default 6)")
     parser.add_argument("--hours", type=str, default="",
                         help="explicit local hours, e.g. 6,11,16,21")
     parser.add_argument("--method",

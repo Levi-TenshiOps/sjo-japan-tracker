@@ -58,11 +58,14 @@ class TestWindowGeneration:
         b = len(generate_windows(prefs(trip_weeks=[2, 3, 4]), today=TODAY))
         assert b > a
 
-    def test_adding_an_unbookable_length_does_not(self):
-        """Six weeks is past the max-stay rule, so the grid must ignore it."""
+    def test_only_an_absurd_length_is_ignored(self):
+        """MAX_STAY_NIGHTS catches a typo; it must not clip a real trip."""
         a = len(generate_windows(prefs(trip_weeks=[2, 3, 4]), today=TODAY))
-        b = len(generate_windows(prefs(trip_weeks=[2, 3, 4, 6]), today=TODAY))
-        assert b == a
+        real = len(generate_windows(prefs(trip_weeks=[2, 3, 4, 6]), today=TODAY))
+        absurd = len(generate_windows(prefs(trip_weeks=[2, 3, 4], extra_nights=[400]),
+                                      today=TODAY))
+        assert real > a, "six weeks is a real trip and must be searched"
+        assert absurd == a
 
 
 class TestScale:

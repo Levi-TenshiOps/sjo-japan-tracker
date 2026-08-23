@@ -63,6 +63,14 @@ class Config:
     hot_list_size: int = 8       # cheapest windows re-priced every run
     hot_share: float = 0.5       # fraction of the budget spent on them
 
+    # The wide net: one plain-text query per month, asking Google for its own
+    # cheapest dates. Costs one request per month in the window and finds
+    # far cheaper fares than the grid reaches in a fortnight, so it is on by
+    # default. `monthly_scan_destination` is a single airport on purpose -
+    # the text query takes a place name, not a metro code list.
+    monthly_scan: bool = True
+    monthly_scan_destination: str = "NRT"
+
     # alert sensitivity
     min_drop_usd: int = 25
     min_drop_pct: float = 0.02
