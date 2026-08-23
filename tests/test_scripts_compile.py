@@ -64,14 +64,47 @@ def test_help_renders(name):
     assert "usage" in (done.stdout or "").lower()
 
 
+def test_the_cli_help_renders():
+    """`tracker.cli` is the product, and it is reached as a module.
+
+    ENTRY_POINTS only globs top-level scripts, so the scheduled task's own
+    command - `python -m tracker.cli` - was not covered by anything here
+    until a new argparse option was added to it on 2026-08-23.
+    """
+    done = subprocess.run(
+        [sys.executable, "-m", "tracker.cli", "--help"],
+        capture_output=True, text=True, timeout=60, cwd=str(ROOT))
+    assert done.returncode == 0, f"tracker.cli --help failed:\n{done.stderr}"
+    assert "usage" in (done.stdout or "").lower()
+
+
 def test_the_documented_sweep_command_starts():
     """The exact command the README and I hand the trip owner.
 
     --status exits immediately and touches nothing, so this is safe to run
     while a real sweep is going: it never queries Google.
+
+    It is pointed at `preferences.example.json` on purpose. The real
+    `preferences.json` holds the trip owner's email address and is therefore
+    gitignored, so it does not exist in a fresh checkout - the first version
+    of this test used the default and failed every CI run on main while
+    passing on the machine that wrote it. A test that cannot run from a
+    clean clone is testing the developer's disk, not the project.
     """
     done = subprocess.run(
-        [sys.executable, str(ROOT / "sweep_forever.py"), "--status"],
+        [sys.executable, str(ROOT / "sweep_forever.py"), "--status",
+         "--preferences", str(ROOT / "preferences.example.json")],
         capture_output=True, text=True, timeout=120, cwd=str(ROOT))
     assert done.returncode == 0, done.stderr
     assert "window" in (done.stdout or "").lower()
+
+
+def test_missing_preferences_fails_with_advice_not_a_traceback():
+    """The first thing a new clone hits. It must say what to do about it."""
+    done = subprocess.run(
+        [sys.executable, str(ROOT / "sweep_forever.py"), "--status",
+         "--preferences", "definitely-not-here.json"],
+        capture_output=True, text=True, timeout=120, cwd=str(ROOT))
+    assert done.returncode == 2, done.stdout
+    assert "setup_tracker.py" in (done.stderr or ""), done.stderr
+    assert "Traceback" not in (done.stderr or "")
