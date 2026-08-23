@@ -30,6 +30,7 @@ an option whose routing could not be read fails closed.
 from __future__ import annotations
 
 import logging
+import random
 from dataclasses import dataclass, replace
 from datetime import date as Date
 from datetime import timedelta
@@ -148,6 +149,7 @@ def verify(
     fetch: Callable[..., str] | None = None,
     sleep: Callable[[float], None] | None = None,
     delay_s: float = 2.0,
+    jitter_s: float = 2.0,
 ) -> list[BrowserOption]:
     """Price each target through Chrome. Visa-rejected options are dropped.
 
@@ -187,8 +189,14 @@ def verify(
             log.info("Chrome %s %s +%dn: nothing returned",
                      t.source, t.depart, (t.ret - t.depart).days)
         found.extend(usable)
+        # Jittered, like every other path that reaches Google. A fixed wait
+        # is a fingerprint: nobody browses on a perfect clock. This one was
+        # the last flat delay left after `monthly.scan_months` was paced on
+        # 2026-08-23 - less glaring than the wide net's 1.5s burst, because
+        # a Chrome launch takes a variable 6-18s and blurs the cadence on
+        # its own, but there is no reason to rely on that.
         if sleep and delay_s:
-            sleep(delay_s)
+            sleep(delay_s + random.uniform(0, max(jitter_s, 0.0)))
 
     found.sort(key=lambda o: o.price_usd)
     return found

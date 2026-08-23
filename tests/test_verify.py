@@ -6,7 +6,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import io
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -136,7 +136,10 @@ class TestVerify:
             hint_keys=[key("2027-01-29", "2027-02-25"),
                        key("2027-02-01", "2027-02-22")], today=TODAY)
         verify(targets, fetch=FakeChrome(dom), sleep=naps.append, delay_s=2.0)
-        assert naps == [2.0, 2.0]
+        # Jittered since 2026-08-23, so a range rather than an equality. A
+        # fixed wait is a fingerprint; see TestChromeLaunchesArePaced.
+        assert len(naps) == 2
+        assert all(2.0 <= n <= 4.0 for n in naps), naps
 
 
 class TestThresholdHelpers:
@@ -420,3 +423,36 @@ class TestGridBudgetFollowsSweepHealth:
     def test_the_health_bar_is_a_real_sample_not_a_token(self):
         from tracker.config import Config
         assert Config().swept_enough >= 20
+
+
+class TestChromeLaunchesArePaced:
+    """The last flat delay in the project, jittered 2026-08-23.
+
+    Every path that reaches Google now waits a jittered interval rather than
+    a fixed one. This one mattered least - a Chrome launch takes a variable
+    6-18s, which blurs the cadence by itself - but relying on that was an
+    accident rather than a decision.
+    """
+
+    def targets(self, n):
+        base = date(2027, 1, 1)
+        return [VerifyTarget(depart=base + timedelta(days=i),
+                             ret=base + timedelta(days=i + 27), source="hot")
+                for i in range(n)]
+
+    def test_it_waits_between_launches(self):
+        naps = []
+        verify(self.targets(3), fetch=lambda url: "", sleep=naps.append,
+               delay_s=2.0, jitter_s=2.0)
+        assert len(naps) == 3
+        assert all(2.0 <= n <= 4.0 for n in naps), naps
+
+    def test_the_wait_is_not_a_metronome(self):
+        naps = []
+        verify(self.targets(25), fetch=lambda url: "", sleep=naps.append,
+               delay_s=2.0, jitter_s=2.0)
+        assert len(set(naps)) > 1, "a fixed wait is a fingerprint"
+
+    def test_no_sleep_callback_is_still_fine(self):
+        """Callers that do not pace must not break."""
+        assert verify(self.targets(2), fetch=lambda url: "") == []
