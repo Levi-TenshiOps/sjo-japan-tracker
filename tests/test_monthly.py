@@ -139,3 +139,60 @@ class TestScanMonths:
         h = MonthHint("x", date(2027, 1, 29), date(2027, 2, 25), 1347)
         assert h.key == "2027-01-29_2027-02-25"
         assert h.key == Window(h.depart, h.ret).key
+
+
+class TestTextQueryForcesCurrency:
+    """Non-negotiable #4: never let CRC reach the email.
+
+    fast_flights.fetch_flights_html sends only {"q": ...} for a string
+    query, dropping hl and curr. Google then serves CRC to a Costa Rican
+    IP, and the page wording changes enough that the hint stops matching -
+    which is how this was found: eight months, eight big pages, zero hints.
+    """
+
+    def _captured(self, monkeypatch):
+        seen = {}
+
+        class FakeResponse:
+            text = "Travel Jan 29 – Feb 25, 2027 for $1,347"
+
+        class FakeClient:
+            def __init__(self, **kw):
+                seen["client_kwargs"] = kw
+
+            def get(self, url, params=None):
+                seen["url"] = url
+                seen["params"] = params
+                return FakeResponse()
+
+        import tracker.search as search
+        monkeypatch.setattr(search, "Client", FakeClient)
+        return seen
+
+    def test_currency_is_forced_to_usd(self, monkeypatch):
+        from tracker.search import fetch_text_query
+        seen = self._captured(monkeypatch)
+        fetch_text_query("Flights from SJO to NRT in February 2027")
+        assert seen["params"]["curr"] == "USD"
+
+    def test_language_is_forced_to_english(self, monkeypatch):
+        from tracker.search import fetch_text_query
+        seen = self._captured(monkeypatch)
+        fetch_text_query("Flights from SJO to NRT in February 2027")
+        assert seen["params"]["hl"] == "en"
+
+    def test_query_is_passed_through(self, monkeypatch):
+        from tracker.search import fetch_text_query
+        seen = self._captured(monkeypatch)
+        fetch_text_query("Flights from SJO to NRT in February 2027")
+        assert seen["params"]["q"] == "Flights from SJO to NRT in February 2027"
+
+    def test_a_failure_returns_empty_not_an_exception(self, monkeypatch):
+        import tracker.search as search
+
+        class Boom:
+            def __init__(self, **kw):
+                raise RuntimeError("network down")
+
+        monkeypatch.setattr(search, "Client", Boom)
+        assert search.fetch_text_query("anything") == ""

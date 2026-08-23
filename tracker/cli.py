@@ -199,14 +199,21 @@ def run(argv: list[str] | None = None) -> int:
             min_nights=min(nights) if nights else None,
             max_nights=max(nights) if nights else None,
         )
+        asked = len(monthly.months_in_window(early, late))
         for h in month_hints:
             log.info("Month hint  %s", h.describe())
         if month_hints:
             keys = monthly.hint_window_keys(month_hints)
             hot = keys + [k for k in hot if k not in set(keys)]
             log.info("Wide net: %d hint(s) from %d request(s); cheapest $%s",
-                     len(month_hints), len(monthly.months_in_window(early, late)),
+                     len(month_hints), asked,
                      f"{min(h.price_usd for h in month_hints):,}")
+        else:
+            # Say so out loud. A silent wide net looks identical to one that
+            # is switched off, and this is the part of the run most likely
+            # to break when Google changes its wording.
+            log.info("Wide net: %d request(s), no usable hint this run "
+                     "(months return one only some of the time)", asked)
 
     # The window plan must not claim the whole budget when the hub sweep is
     # enabled, or the sweep never gets a single request and the config flag

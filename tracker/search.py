@@ -19,6 +19,8 @@ from __future__ import annotations
 import json
 import logging
 import random
+
+from primp import Client
 import re
 import time
 from dataclasses import dataclass, field
@@ -255,17 +257,29 @@ class _Fetched(list):
     raw_html: str = ""
 
 
-def fetch_text_query(query: str) -> str:
+def fetch_text_query(
+    query: str, *, currency: str = "USD", language: str = "en"
+) -> str:
     """Raw HTML for a plain-text Google Flights query.
 
-    Deliberately separate from `_default_fetch`: that one parses an
-    itinerary list, while the monthly wide net wants the page itself so it
-    can read the "Travel A - B for $P" recommendation out of the prose.
-    Returns "" on any failure, because a missing month is a hole in the net
-    and not a reason to abandon the run.
+    Does **not** go through `fast_flights.fetch_flights_html`. Given a plain
+    string that helper sends `{"q": query}` and nothing else, dropping both
+    `hl` and `curr`. Two things break as a result: the page comes back in a
+    wording the "Travel A - B for $P" recommendation no longer matches, and
+    - far worse - Google serves CRC to a Costa Rican IP, which is exactly
+    what forcing the currency everywhere else exists to prevent.
+
+    Returns "" on any failure. A missing month is a hole in the net, not a
+    reason to abandon the run.
     """
     try:
-        return fetch_flights_html(query) or ""
+        client = Client(impersonate="chrome_145", impersonate_os="macos",
+                        referer=True, cookie_store=True)
+        res = client.get(
+            "https://www.google.com/travel/flights",
+            params={"q": query, "hl": language, "curr": currency},
+        )
+        return res.text or ""
     except Exception as exc:            # noqa: BLE001 - deliberately broad
         log.debug("text query %r failed: %s", query, exc)
         return ""
