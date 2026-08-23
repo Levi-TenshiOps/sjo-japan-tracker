@@ -40,7 +40,7 @@ from tracker.browser import chrome_path           # noqa: E402
 from tracker.preferences import Preferences, PreferencesError  # noqa: E402
 from tracker.schedule import generate_windows     # noqa: E402
 from tracker.sweeper import (                     # noqa: E402
-    DEFAULT_STORE, Discovery, SweepStore, sweep_batch,
+    DEFAULT_STORE, Discovery, SweepStore, sweep_batch, sweep_order,
 )
 
 log = logging.getLogger("sweep")
@@ -82,7 +82,7 @@ def main() -> int:
         return 2
     cfg = config_mod.load(args.config)
 
-    windows = generate_windows(prefs, today=Date.today())
+    windows = sweep_order(generate_windows(prefs, today=Date.today()))
     store = SweepStore.load(args.store)
 
     if args.status:

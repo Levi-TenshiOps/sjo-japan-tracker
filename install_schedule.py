@@ -220,6 +220,18 @@ def print_windows(hours: list[int], root: Path) -> int:
         )
     print("\nThen, for each task, open Task Scheduler and tick")
     print('"Run task as soon as possible after a scheduled start is missed".')
+
+    # The sweep is a *service*, not a scheduled job: it runs continuously
+    # and resumes itself, so it wants ONLOGON rather than a daily trigger.
+    # It is what closes the coverage gap the scheduled runs cannot - they
+    # price ~120 windows a day against a space of ~4,000.
+    print("\nAnd, to keep the full-coverage sweep running (recommended):\n")
+    print(
+        f'schtasks /Create /TN "FlightTrackerSweep" /SC ONLOGON '
+        f'/TR "cmd /c cd /d {root} && {python_exe()} sweep_forever.py '
+        f'--batch 25 --delay 6 >> sweep.log 2>&1"'
+    )
+    print("\nCheck on it any time with:  python sweep_forever.py --status")
     return 0
 
 

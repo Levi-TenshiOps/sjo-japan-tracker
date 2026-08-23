@@ -235,6 +235,23 @@ class SweepStore:
                 f"{len(self.found)} window(s) remembered")
 
 
+def sweep_order(windows: Sequence) -> list:
+    """Windows in the order the sweep should walk them.
+
+    Priority months first. In plain date order the sweep starts eight
+    months before the dates the trip owner actually cares about, so at ~19
+    seconds a window it would be most of a day before it reached January.
+    Leading with the priority months makes the first useful finding arrive
+    in the first hour instead.
+
+    Within each group the order stays by date, because a stable order is
+    what makes the persisted cursor mean anything across restarts.
+    """
+    priority = [w for w in windows if getattr(w, "priority", False)]
+    rest = [w for w in windows if not getattr(w, "priority", False)]
+    return priority + rest
+
+
 def sweep_batch(
     windows: Sequence,
     store: SweepStore,

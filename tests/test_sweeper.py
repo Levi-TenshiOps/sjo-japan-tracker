@@ -261,3 +261,49 @@ class TestProgress:
 
     def test_zero_total_does_not_divide_by_zero(self):
         assert "0/0" in SweepStore().progress(0)
+
+
+class TestSweepOrder:
+    """Priority months first, or the first useful find is hours away.
+
+    In plain date order the sweep starts eight months before the dates the
+    trip owner cares about. At ~19s a window that is most of a day before
+    it reaches January.
+    """
+
+    def _mixed(self):
+        base = date(2026, 9, 1)
+        general = [Window(base + timedelta(days=i), base + timedelta(days=i + 27))
+                   for i in range(3)]
+        pri = [Window(date(2027, 1, 1) + timedelta(days=i),
+                      date(2027, 1, 28) + timedelta(days=i), priority=True)
+               for i in range(2)]
+        return general + pri
+
+    def test_priority_windows_come_first(self):
+        from tracker.sweeper import sweep_order
+        got = sweep_order(self._mixed())
+        assert [w.priority for w in got] == [True, True, False, False, False]
+
+    def test_nothing_is_lost_or_duplicated(self):
+        from tracker.sweeper import sweep_order
+        src = self._mixed()
+        got = sweep_order(src)
+        assert sorted(w.key for w in got) == sorted(w.key for w in src)
+
+    def test_date_order_survives_within_each_group(self):
+        """A stable order is what makes the persisted cursor meaningful."""
+        from tracker.sweeper import sweep_order
+        got = sweep_order(self._mixed())
+        pri = [w.depart for w in got if w.priority]
+        gen = [w.depart for w in got if not w.priority]
+        assert pri == sorted(pri) and gen == sorted(gen)
+
+    def test_all_priority_is_unchanged(self):
+        from tracker.sweeper import sweep_order
+        src = [w for w in self._mixed() if w.priority]
+        assert [w.key for w in sweep_order(src)] == [w.key for w in src]
+
+    def test_empty_is_empty(self):
+        from tracker.sweeper import sweep_order
+        assert sweep_order([]) == []
