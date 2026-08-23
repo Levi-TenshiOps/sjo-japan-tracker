@@ -69,17 +69,26 @@ class Config:
     # default. `monthly_scan_destination` is a single airport on purpose -
     # the text query takes a place name, not a metro code list.
     monthly_scan: bool = True
-    monthly_scan_destination: str = "NRT"
+    monthly_scan_destination: str = "NRT"   # text query wants one airport
 
     # Chrome verification. Plain HTTP does not just miss long stays: on
     # 2027-01-29 -> 2027-02-25 it reported a cheapest of $1,635 while the
     # real cheapest was $1,347 on Edelweiss/SWISS via Zurich - a routing
     # absent from the server-rendered HTML entirely. So every window we
     # actually care about gets re-priced through Chrome, which sees it.
-    # A launch costs ~25s against ~3s, hence a small explicit budget.
+    # A launch measures ~13s in practice, so 20 costs about four minutes
+    # of a run. Worth it: across four windows HTTP's cheapest visa-free
+    # fare was $2,509/$2,866/$3,057/$3,179 where Chrome found
+    # $1,347/$1,432/$2,688/$3,093. HTTP lost every time.
+    # Chrome queries the metro code, not a single airport: TYO returns both
+    # Narita and Haneda for one launch, and measured on 2027-01-29 it gave
+    # 15 options against NRT's 13 while still finding the same $1,347. The
+    # text-query wide net cannot do this - "to HND" returns no hint at all -
+    # which is why the two settings differ.
+    chrome_destination: str = "TYO"
     chrome_verify: bool = True
     chrome_path: str = ""              # blank = autodetect
-    chrome_max_per_run: int = 10
+    chrome_max_per_run: int = 20
     chrome_timeout_s: int = 120
     chrome_budget_ms: int = 30000
 

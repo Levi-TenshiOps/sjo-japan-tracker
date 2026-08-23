@@ -318,7 +318,7 @@ def run(argv: list[str] | None = None) -> int:
         )
         verified = verify_mod.verify(
             targets,
-            origin=cfg.origins[0], destination=cfg.monthly_scan_destination,
+            origin=cfg.origins[0], destination=cfg.chrome_destination,
             max_stops=cfg.max_stops, chrome_override=cfg.chrome_path,
             timeout_s=cfg.chrome_timeout_s, budget_ms=cfg.chrome_budget_ms,
             sleep=time.sleep, delay_s=cfg.request_delay_seconds,
@@ -345,10 +345,14 @@ def run(argv: list[str] | None = None) -> int:
     log.info("Ranking: %s", preview.describe())
 
     if not args.no_history:
-        log.info("Logged %d row(s)", history.append(
-            cfg.history_csv,
-            history.rows_from(accepted, band_of=bands.classify,
-                              band_source=bands.source)))
+        rows = history.rows_from(accepted, band_of=bands.classify,
+                                 band_source=bands.source)
+        # Chrome's prices are the accurate ones, so they belong in the
+        # history too - otherwise the hot list only ever learns the
+        # inflated HTTP numbers and keeps re-pricing the wrong windows.
+        rows += history.rows_from_verified(verified, band_of=bands.classify)
+        log.info("Logged %d row(s) (%d from Chrome)",
+                 history.append(cfg.history_csv, rows), len(verified))
 
     qualifying = [i for i in accepted if i.price_usd <= cfg.good_price_usd]
     # The fare the email is *about*. Normally the cheapest one clearing the

@@ -48,6 +48,47 @@ class Row:
         return {f: getattr(self, f) for f in FIELDS}
 
 
+def rows_from_verified(
+    options,
+    *,
+    band_of,
+    band_source: str = "CHROME",
+    checked_at: datetime | None = None,
+) -> list[Row]:
+    """History rows for Chrome-verified options.
+
+    These matter more than the HTTP rows beside them. Measured across four
+    windows, HTTP's cheapest visa-free fare was $2,509 / $2,866 / $3,057 /
+    $3,179 where Chrome found $1,347 / $1,432 / $2,688 / $3,093. A hot list
+    trained only on the HTTP numbers is being taught that every window is
+    expensive, and will keep re-pricing the wrong ones. Logging what Chrome
+    actually saw is what lets the hot list converge on real bargains.
+
+    `duration_min` is the whole round trip here, not the outbound leg as in
+    `rows_from` - the collapsed DOM does not split it. The column is only
+    ever read for display, never for the duration maths.
+    """
+    stamp = (checked_at or datetime.now(timezone.utc)).isoformat(timespec="seconds")
+    return [
+        Row(
+            checked_at_utc=stamp,
+            origin=o.origin,
+            destination=o.destination,
+            depart_date=o.depart_date.isoformat(),
+            return_date=o.return_date.isoformat(),
+            price_usd=o.price_usd,
+            duration_min=o.total_minutes,
+            stops=o.stop_count,
+            hubs="+".join(o.stops),
+            airlines=";".join(o.airlines),
+            band=band_of(o.price_usd),
+            band_source=band_source,
+            deep_link=o.deep_link,
+        )
+        for o in options
+    ]
+
+
 def rows_from(
     itineraries: Iterable[Itinerary],
     *,

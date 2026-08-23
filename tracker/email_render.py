@@ -281,6 +281,9 @@ def render_html(
     verified: Sequence = (),
 ) -> str:
     verified_html = verified_block_html(verified, threshold)
+    verified_note = (
+        " — the block above is the checked, accurate one."
+        if verified else ".")
     selection, n_under = rank_for_email(
         itineraries, threshold=threshold, count=count,
         priority_months=priority_months, priority_share=priority_share,
@@ -426,6 +429,10 @@ def render_html(
                                   color:{MUTED};">
               Top {len(shown)}, cheapest first \u00b7 Round trip \u00b7 1 adult
               \u00b7 Economy \u00b7 No US, Canada or China transit</p>
+            <p class="mut" style="margin:4px 0 0;font:400 12px/1.5 {FONT};
+                                  color:{MUTED};">
+              Broad sweep, quick method. It cannot see some of Google's
+              cheaper routings, so treat these as an upper bound{verified_note}</p>
           </td>
         </tr>
 

@@ -169,6 +169,38 @@ invented to fill the gap. The connection airports are what matter, because
 they are what the visa rule needs, and an option whose routing could not be
 read fails closed rather than being treated as clean.
 
+**Audited 2026-08-22: HTTP lost every window.** Four windows, both sides
+visa-filtered so the comparison is fair:
+
+    window              HTTP visa-free   Chrome    HTTP missed
+    2027-01-29 +27n           $2,509     $1,347        $1,162
+    2026-11-30 +29n           $2,866     $1,432        $1,434
+    2027-02-12 +28n           $3,057     $2,688          $369
+    2027-03-05 +28n           $3,179     $3,093           $86
+
+An earlier version of this audit compared *unfiltered* HTTP against
+filtered Chrome and made HTTP look better than it is. Filter both sides.
+
+**Zurich is where the cheap fares are.** Across every visa-free option
+collected, ZRH was the only hub appearing in fares at or under $1,600 (2 of
+2 appearances). MEX, PVR, PTY, IST, MAD, DOH and MTY appeared 15 times
+between them and never once cheap. Forcing `connecting_airports=[ZRH]` does
+*not* help though — it returns the same fare when one exists and nothing
+when it does not, so a general query is strictly better.
+
+**The wide net cannot see Haneda.** "Flights from SJO to HND in <month>"
+returns no recommendation at all, and every rephrasing tried ("to Tokyo",
+"cheapest round trip", "for 4 weeks") returns exactly what "to NRT" does.
+That is why `monthly_scan_destination` is a single airport while
+`chrome_destination` is the metro code TYO: Chrome *can* take TYO and
+returns both airports for one launch.
+
+**Coverage is the honest limit.** Chrome prices `chrome_max_per_run` (20)
+windows a run, 120 a day, against a search space of ~4,000. Everything else
+is priced by HTTP, whose numbers run hundreds of dollars high. So the email
+leads with the Chrome block and labels the HTTP table an upper bound. Do
+not quote an HTTP price as "the cheapest" anywhere.
+
 **The wide net beats the grid at finding fares.** `tracker/monthly.py`
 sends one plain-text query per month ("Flights from SJO to NRT in February
 2027") and reads Google's own recommendation out of the prose:
