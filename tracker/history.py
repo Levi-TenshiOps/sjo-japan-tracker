@@ -141,8 +141,17 @@ def read_prices(
     origin: str | None = None,
     destination: str | None = None,
     since: Date | None = None,
+    band_source: str | None = None,
 ) -> list[float]:
-    """Historical prices for the baseline, optionally filtered."""
+    """Historical prices for the baseline, optionally filtered.
+
+    `band_source="CHROME"` restricts to the browser-verified rows, which is
+    what the baseline should be built from. The two populations in this file
+    are not comparable: measured over 692 rows on one day, the HTTP rows had
+    a median of $2,866 and the Chrome rows $2,346, because HTTP cannot see
+    the cheap European routings at all. Averaging them together describes
+    neither.
+    """
     p = Path(path)
     if not p.exists():
         return []
@@ -152,6 +161,8 @@ def read_prices(
             if origin and rec.get("origin", "").upper() != origin.upper():
                 continue
             if destination and rec.get("destination", "").upper() != destination.upper():
+                continue
+            if band_source and rec.get("band_source", "") != band_source:
                 continue
             if since:
                 stamp = rec.get("checked_at_utc", "")[:10]

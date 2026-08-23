@@ -307,3 +307,57 @@ class TestSweepOrder:
     def test_empty_is_empty(self):
         from tracker.sweeper import sweep_order
         assert sweep_order([]) == []
+
+
+class TestSweepFeedsTheBaseline:
+    """The price baseline should describe fares you can actually book.
+
+    Google's own insights cover every routing it sells, including the US and
+    Canadian transits this traveller cannot use: on 2026-08-23 it called
+    $1,800 the usual price while the median across 259 verified visa-free
+    observations was $2,346. The sweep sees far more of the market than the
+    scheduled runs, so its rows are most of the corrective evidence.
+    """
+
+    def test_every_visa_free_option_is_logged_not_just_the_cheapest(self, dom, tmp_path):
+        """A baseline is a distribution, so it needs the dear ones too."""
+        import csv
+        csv_path = tmp_path / "sweep_history.csv"
+        sweep_batch(windows(1), SweepStore(), batch=1, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0, history_csv=str(csv_path))
+        rows = list(csv.DictReader(csv_path.open(encoding="utf-8")))
+        assert len(rows) == 1, "the fixture holds one visa-free option"
+        assert int(rows[0]["price_usd"]) == 2652
+
+    def test_rows_are_marked_as_chrome_sourced(self, dom, tmp_path):
+        """read_prices filters on this to exclude the inflated HTTP rows."""
+        import csv
+        csv_path = tmp_path / "sweep_history.csv"
+        sweep_batch(windows(1), SweepStore(), batch=1, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0, history_csv=str(csv_path))
+        rows = list(csv.DictReader(csv_path.open(encoding="utf-8")))
+        assert rows[0]["band_source"] == "CHROME"
+
+    def test_no_history_file_means_no_logging_and_no_crash(self, dom):
+        s = SweepStore()
+        sweep_batch(windows(2), s, batch=2, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0, history_csv=None)
+        assert s.cursor == 2
+
+    def test_an_unwritable_path_does_not_stop_the_sweep(self, dom, tmp_path):
+        """Logging is a side benefit; it must never cost coverage."""
+        bad = tmp_path / "nope" / "deep" / "sweep.csv"
+        s = SweepStore()
+        sweep_batch(windows(2), s, batch=2, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0, history_csv=str(bad))
+        assert s.cursor == 2
+
+    def test_rows_accumulate_across_batches(self, dom, tmp_path):
+        import csv
+        csv_path = tmp_path / "sweep_history.csv"
+        s = SweepStore()
+        for _ in range(3):
+            sweep_batch(windows(3), s, batch=1, fetch=FakeChrome(dom),
+                        sleep=lambda _: None, delay_s=0, history_csv=str(csv_path))
+        rows = list(csv.DictReader(csv_path.open(encoding="utf-8")))
+        assert len(rows) == 3

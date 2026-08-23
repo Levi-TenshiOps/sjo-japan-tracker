@@ -88,3 +88,59 @@ class TestConfigActuallyPicksItUp:
         assert cfg.smtp_user == "me@gmail.com"
         assert cfg.smtp_password == "abcdefghijklmnop"
         assert cfg.smtp_port == 587
+
+
+class TestBaselinePrefersOurOwnVerifiedPrices:
+    """Google's "usual" describes fares this traveller cannot book.
+
+    Measured 2026-08-23: Google's insights put the usual price at $1,800,
+    which produced "$165 below the $1,800 travellers usually pay" beside a
+    $1,347 headline fare. Both halves were wrong - the saving was measured
+    against the grid's dearer price, and $1,800 is the median across every
+    routing Google sells, including the US and Canadian transits that are
+    unusable here. Across 259 verified visa-free observations the median
+    was $2,346.
+    """
+
+    def _history(self, n=40, days=6):
+        # Enough observations across enough days to clear the bar.
+        return [2000 + (i * 13) % 900 for i in range(n)], days
+
+    def test_our_history_outranks_google(self):
+        from tracker.pricing import PriceBands, resolve_bands
+        prices, days = self._history()
+        google = PriceBands(low=900, high=3000, usual=1800, source="GOOGLE")
+        got = resolve_bands(google_bands=google, history_prices=prices,
+                            history_days=days)
+        assert got.source == "HISTORY"
+        assert got.usual != 1800
+
+    def test_google_still_used_before_the_bar_is_met(self):
+        """One day of data describes the snapshot, not the route."""
+        from tracker.pricing import PriceBands, resolve_bands
+        prices, _ = self._history()
+        google = PriceBands(low=900, high=3000, usual=1800, source="GOOGLE")
+        got = resolve_bands(google_bands=google, history_prices=prices,
+                            history_days=1)
+        assert got.source == "GOOGLE"
+
+    def test_too_few_observations_falls_back(self):
+        from tracker.pricing import PriceBands, resolve_bands
+        google = PriceBands(low=900, high=3000, usual=1800, source="GOOGLE")
+        got = resolve_bands(google_bands=google, history_prices=[2000, 2100],
+                            history_days=9)
+        assert got.source == "GOOGLE"
+
+    def test_seed_remains_the_last_resort(self):
+        from tracker.pricing import resolve_bands
+        assert resolve_bands().source == "SEED"
+
+    def test_the_google_note_admits_what_it_includes(self):
+        """The reader must know that band covers unbookable routings."""
+        from tracker.pricing import SOURCE_NOTE
+        note = SOURCE_NOTE["GOOGLE"].lower()
+        assert "us" in note and "canada" in note
+
+    def test_the_history_note_says_it_is_visa_free(self):
+        from tracker.pricing import SOURCE_NOTE
+        assert "visa-free" in SOURCE_NOTE["HISTORY"].lower()

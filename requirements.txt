@@ -1,2 +1,18 @@
+# Runtime dependencies.
+#
+# fast-flights pulls selectolax, primp and typing_extensions in as its own
+# dependencies, but two of those are now imported *directly* by this project
+# and so belong here in their own right: browser.py parses the rendered DOM
+# with selectolax, and search.py drives primp to force hl/curr on the text
+# query. Relying on a transitive dependency for something you import
+# yourself is how a working checkout and a broken CI run end up disagreeing.
 fast-flights>=2.2
 PyYAML>=6.0
+selectolax>=0.3
+primp>=0.6
+
+# Not imported here at all. fast-flights needs it and does not always get it
+# installed - CI failed with "No module named 'typing_extensions'" on a
+# clean runner while every local checkout was fine, because locally it had
+# arrived as somebody else's transitive dependency.
+typing_extensions>=4.0

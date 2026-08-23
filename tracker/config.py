@@ -116,6 +116,11 @@ class Config:
     # Written by sweep_forever.py, read here. Missing is fine - it just
     # means the background sweep is not running.
     sweep_store: str = "discoveries.json"
+    # The sweep logs its observations to its own CSV rather than sharing
+    # price_history.csv. Both processes append, and two writers on one file
+    # can interleave a line; separate files cost nothing and the baseline
+    # simply reads both.
+    sweep_history_csv: str = "sweep_history.csv"
     # How stale a swept price may be before the email stops showing it. The
     # store keeps findings for longer so the sweep can tell what it has
     # already seen, but a price is a snapshot: presenting a day-old number

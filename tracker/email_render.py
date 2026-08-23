@@ -314,8 +314,13 @@ def render_html(
         for n, i in enumerate(shown)
     ]
     best = min(itineraries, key=lambda i: i.price_usd)
-    band = bands.classify(best.price_usd)
-    saving = savings_vs_usual(best.price_usd, bands)
+    # The fare the email is actually about. The grid's `best` is the dear
+    # one, so measuring against it produced "$165 below the $1,800
+    # travellers usually pay" in an email whose own headline fare was
+    # $1,347 - understating the saving by $288 and contradicting itself.
+    cheapest_seen = min([best.price_usd] + [o.price_usd for o in verified])
+    band = bands.classify(cheapest_seen)
+    saving = savings_vs_usual(cheapest_seen, bands)
 
     # Name the city, not the code we happened to search. A metro-code search
     # reads as "TYO" everywhere unless it is translated here.
@@ -328,7 +333,6 @@ def render_html(
     # the email contradicting itself in its first sentence.
     verified_under = [o for o in verified if o.price_usd <= threshold]
     total_under = n_under + len(verified_under)
-    cheapest_seen = min([best.price_usd] + [o.price_usd for o in verified])
 
     if total_under:
         headline = (
@@ -525,7 +529,8 @@ def render_text(
     verified: Sequence = (),
 ) -> str:
     best = min(itineraries, key=lambda i: i.price_usd)
-    band = bands.classify(best.price_usd)
+    cheapest_seen = min([best.price_usd] + [o.price_usd for o in verified])
+    band = bands.classify(cheapest_seen)
     lines = [
         "SJO -> JAPAN FLIGHT TRACKER",
         "=" * 46,
@@ -539,7 +544,7 @@ def render_text(
         f"({BAND_LABEL[band]} for this route).",
         "",
     ]
-    saving = savings_vs_usual(best.price_usd, bands)
+    saving = savings_vs_usual(cheapest_seen, bands)
     if saving and bands.usual:
         lines.append(
             f"That is {format_price(saving)} below the "

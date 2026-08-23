@@ -146,13 +146,32 @@ def resolve_bands(
     history_prices: Sequence[float] | None = None,
     history_days: int | None = None,
 ) -> PriceBands:
-    """Pick the best available band source."""
-    if google_bands is not None:
-        return google_bands
+    """Pick the best available band source.
+
+    Our own recorded prices come first, ahead of Google's, once there are
+    enough of them across enough days. That ordering is deliberate and was
+    the other way round.
+
+    Google's price insights describe *every* routing it sells, including the
+    US and Canadian transits this traveller cannot use. Measured
+    2026-08-23 it called $1,800 the usual price, while the cheapest
+    visa-free fare on offer that day was $1,347 and the median across 259
+    browser-verified visa-free observations was $2,346. Quoting Google's
+    number produced "$165 below the $1,800 travellers usually pay" beside a
+    $1,347 headline: understated, and measured against a population the
+    reader is not allowed to book from.
+
+    The bar for using our own numbers is unchanged - 25 observations across
+    5 distinct days - because percentiles over a single snapshot describe
+    the snapshot rather than the route. Until that bar is met Google's
+    bands remain the best guess available.
+    """
     if history_prices:
         derived = bands_from_history(history_prices, distinct_days=history_days)
         if derived is not None:
             return derived
+    if google_bands is not None:
+        return google_bands
     return SEED_BANDS
 
 
@@ -171,8 +190,10 @@ BAND_COLOR: dict[Band, str] = {
 }
 
 SOURCE_NOTE: dict[Source, str] = {
-    "GOOGLE": "Based on Google Flights' own price insights for this route.",
-    "HISTORY": "Based on the price range this tracker has recorded so far.",
+    "GOOGLE": ("Based on Google Flights' own price insights, which include "
+               "routings through the US and Canada that you cannot use."),
+    "HISTORY": ("Based on visa-free fares this tracker has verified in a "
+                "browser - the ones you can actually book."),
     "SEED": (
         "Based on the typical range Google publishes for San Jose to Tokyo, "
         "converted to US dollars."

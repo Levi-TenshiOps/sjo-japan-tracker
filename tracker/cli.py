@@ -287,7 +287,16 @@ def run(argv: list[str] | None = None) -> int:
 
     hist_prices, hist_days = [], 0
     if not args.no_history:
-        hist_prices = history.read_prices(cfg.history_csv, origin=cfg.origins[0])
+        # Verified rows only. The HTTP rows in this file are systematically
+        # dearer (median $2,866 against Chrome's $2,346 on the same day)
+        # because HTTP cannot see the cheap European routings, so mixing
+        # the two populations describes neither.
+        hist_prices = history.read_prices(
+            cfg.history_csv, origin=cfg.origins[0], band_source="CHROME")
+        # The sweep sees far more of the market than the scheduled runs do,
+        # so its observations are most of the baseline.
+        hist_prices += history.read_prices(
+            cfg.sweep_history_csv, origin=cfg.origins[0], band_source="CHROME")
         hist_days = history.distinct_days(cfg.history_csv, origin=cfg.origins[0])
     bands = pricing.resolve_bands(
         google_bands=google_bands,

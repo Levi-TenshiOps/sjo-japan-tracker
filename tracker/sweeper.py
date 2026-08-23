@@ -43,6 +43,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
+from . import history as history_mod
 from .browser import BrowserOption, chrome_path, fetch_dom, parse_options
 from .verify import booking_link
 
@@ -268,6 +269,7 @@ def sweep_batch(
     sleep: Callable[[float], None] = time.sleep,
     delay_s: float = 8.0,
     on_find: Callable[[Discovery], None] | None = None,
+    history_csv: str | None = None,
 ) -> int:
     """Price the next `batch` windows, advancing and wrapping the cursor.
 
@@ -311,6 +313,18 @@ def sweep_batch(
             cheapest = _with_link(cheapest, max_stops)
             if store.record(cheapest) and on_find is not None:
                 on_find(Discovery.from_option(cheapest))
+
+            # Log every visa-free option, not just the cheapest. The price
+            # baseline is a *distribution* - what a traveller typically pays
+            # - so it needs the dear ones too. This is also what earns the
+            # baseline its 5-distinct-day requirement in a reasonable time:
+            # the scheduled runs alone contribute a few dozen rows a day.
+            if history_csv:
+                try:
+                    history_mod.append(history_csv, history_mod.rows_from_verified(
+                        options, band_of=lambda _p: "TYPICAL"))
+                except OSError as exc:
+                    log.debug("could not log sweep rows: %s", exc)
 
         store.cursor += 1
         store.windows_priced += 1
