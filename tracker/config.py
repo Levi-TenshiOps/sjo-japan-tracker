@@ -180,6 +180,56 @@ def _parse_date_pairs(raw: Any) -> list[tuple[Date, Date | None]]:
     return pairs
 
 
+DEFAULT_ENV_PATH = ".env"
+
+
+def load_dotenv(path: str | Path = DEFAULT_ENV_PATH) -> int:
+    """Read KEY=VALUE lines from `.env` into the environment.
+
+    This was missing entirely. `setup_tracker.py` wrote a .env, the README
+    and .env.example documented it, and nothing ever read it - `_env` only
+    ever consulted os.environ. So every run ended at "SMTP credentials
+    missing" no matter how correct the file was, which is a silent failure
+    of exactly the kind that looks like a broken password.
+
+    A real environment variable always wins over the file, so a scheduled
+    job or a shell export can still override it. Returns how many names
+    were set, which the caller logs.
+
+    Deliberately hand-rolled rather than adding python-dotenv: it is
+    fifteen lines and this project takes no runtime dependency without a
+    reason.
+    """
+    p = Path(path)
+    if not p.exists():
+        return 0
+    set_count = 0
+    try:
+        text = p.read_text(encoding="utf-8")
+    except OSError:
+        return 0
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key.lower().startswith("export "):
+            key = key[7:].strip()
+        if not key or key in os.environ:
+            continue            # a real env var outranks the file
+        value = value.strip()
+        # Strip one matching pair of surrounding quotes, and any trailing
+        # `# comment` on an unquoted value.
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        elif "#" in value:
+            value = value.split("#", 1)[0].strip()
+        os.environ[key] = value
+        set_count += 1
+    return set_count
+
+
 def _env(name: str, default: str = "") -> str:
     return (os.environ.get(name) or default).strip()
 
@@ -214,6 +264,7 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH, *, use_env: bool = True) -> Con
         cfg.hubs = [h.code for h in usable_hubs(cfg.hub_tier)]  # type: ignore[arg-type]
 
     if use_env:
+        load_dotenv()
         cfg.alert_email = _env("ALERT_EMAIL", cfg.alert_email)
         cfg.smtp_host = _env("SMTP_HOST", cfg.smtp_host)
         cfg.smtp_port = int(_env("SMTP_PORT", str(cfg.smtp_port)) or cfg.smtp_port)
