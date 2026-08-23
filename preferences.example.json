@@ -1,0 +1,30 @@
+{
+  "alert_email": "you@example.com",
+  "search_months": 8,
+  "min_lead_days": 21,
+  "earliest_departure": "",
+  "latest_departure": "",
+  "departure_step_days": 4,
+  "priority_months": [
+    1,
+    2,
+    3
+  ],
+  "priority_share": 0.5,
+  "result_count": 20,
+  "trip_weeks": [
+    2,
+    3,
+    4,
+    5
+  ],
+  "duration_flex_days": 0,
+  "good_price_usd": 1380,
+  "great_price_usd": 1150,
+  "destinations": [
+    "TYO",
+    "OSA"
+  ],
+  "hub_tier": "LIGHT",
+  "version": 1
+}

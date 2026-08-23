@@ -1,0 +1,26 @@
+# Personal, never commit
+.env
+*.env
+!.env.example
+preferences.json
+state.json
+throttle.json
+rotation.json
+tracker.log
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+email*.html
+preview*.html
+.DS_Store
+
+# Runtime data and captured scratch payloads.
+# tests/payload_ds1.html is the trimmed fixture and IS tracked.
+price_history.csv
+nrt_payload.html
+nrt_payload.json
+kix_payload.html
+*-preview.html

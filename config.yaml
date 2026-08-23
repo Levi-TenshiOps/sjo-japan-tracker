@@ -1,0 +1,41 @@
+# Search parameters only. Nothing personal lives here, so this file is safe
+# to commit and the repository is safe to share or publish.
+#
+# Your email, travel dates and trip lengths live in preferences.json,
+# written by `python setup_tracker.py` and gitignored.
+# Mail credentials live in .env, also gitignored.
+
+origins: [SJO]
+
+# FREE  = zero paperwork for a Costa Rican passport
+# LIGHT = also allow short online authorisations (UK ETA, Korea K-ETA)
+hub_tier: LIGHT
+
+# Leave `hubs` unset to use every usable hub at the tier above. US, Canadian,
+# Chinese and Russian airports are rejected by the code even if listed here.
+# hubs: [MEX, ZRH, MAD, AMS, CDG, FRA, IST, DOH, DXB, ICN]
+
+# Itinerary quality filters.
+max_stops: 2
+max_total_hours: 60      # reject brutal multi-day routings
+min_layover_min: 75      # reject connections too tight to actually make
+
+# Coverage strategy. The cheapest known windows are re-priced every run;
+# the rest of the search space rotates one slice at a time.
+hot_list_size: 8
+hot_share: 0.4          # rest splits between priority and general pools
+deep_hub_sweep: true
+request_delay_seconds: 3.0
+max_requests_per_run: 40   # ceiling; the adaptive throttle usually sits lower
+
+# Alerting. Two emails a day maximum, and the second is held back so the
+# day's cheapest fare can claim it.
+min_drop_usd: 25           # smallest drop worth a second email
+min_drop_pct: 0.02
+reserve_last_slot: true
+last_call_hour: 20         # Costa Rica time; release the held slot at this hour
+
+history_csv: price_history.csv
+state_file: state.json
+throttle_file: throttle.json
+rotation_file: rotation.json
