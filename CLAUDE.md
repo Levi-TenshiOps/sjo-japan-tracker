@@ -125,6 +125,13 @@ expensive, it does not exist, so searching it burnt a quarter of every run;
 the boundary, which whole-week trip lengths step straight over — that is
 what `extra_nights: [30]` is for.
 
+**The measured effect of dropping 35n.** Two live runs, 26 requests each,
+same afternoon: before, 31 usable options and a 38% empty rate; after, 43
+usable options and 23%. Same request cost, 39% more usable fares, and the
+30-night length turned out to be the single most productive one (13 of the
+43 rows). That is the shape of the win — not more requests, fewer wasted
+ones.
+
 **SJO-OSA returns nothing, at any stop count.** Not a `max_stops` artefact:
 1, 2, 3 and unlimited stops all return zero on every date tried, while TYO
 returns 12-14 on the same dates. The probation machinery in `schedule.py`
