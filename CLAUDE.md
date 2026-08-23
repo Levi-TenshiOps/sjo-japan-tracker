@@ -225,6 +225,38 @@ That is why `monthly_scan_destination` is a single airport while
 `chrome_destination` is the metro code TYO: Chrome *can* take TYO and
 returns both airports for one launch.
 
+**How complete the sweep actually is.** Tested 2026-08-23, because
+"complete" is a claim worth checking rather than asserting.
+
+*Combinations:* 223 departure days x 18 trip lengths = 4,014, and
+`generate_windows` emits exactly 4,014. Nothing inside the configured
+constraints is skipped.
+
+*Stops:* `max_stops=2` re-tested through Chrome, since the earlier answer
+came from the HTTP path that cannot see the cheap European routings and so
+proved nothing:
+
+    window              1 stop     2 stops     3 stops   unlimited
+    2027-01-29 +27n     $1,347      $1,347      $1,347      $1,347
+    2026-11-30 +29n     $2,687      $1,432      $1,432      $1,432
+
+Two is the knee. One costs $1,255 on the second window; three and beyond
+add nothing at all.
+
+*Truncation:* Google reported "16 results returned" while the parser found
+13, and the page carries a "View more flights" control that `--dump-dom`
+cannot click. That sounds alarming and is not: re-querying the same window
+with `max_price` caps of $1,500, $1,900 and $2,600 surfaced **no option the
+uncapped query had missed** until $2,600, where the single new row was a
+$2,531 US transit the visa rule rejects anyway. The rows behind that
+control are the dear ones; cheap fares are not hidden there.
+
+What the sweep therefore does *not* guarantee: that a price is current (a
+full pass takes ~21 h, so a finding can be that old), that anything outside
+21-38 nights or outside NRT/HND is seen at all, or that Google itself lists
+every carrier. Only the cheapest visa-free option per window is kept, by
+design - the baseline gets the rest through `sweep_history.csv`.
+
 **Coverage is the honest limit.** Chrome prices `chrome_max_per_run` (20)
 windows a run, 120 a day, against a search space of ~4,000. Everything else
 is priced by HTTP, whose numbers run hundreds of dollars high. So the email
