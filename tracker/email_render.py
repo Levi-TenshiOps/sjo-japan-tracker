@@ -111,9 +111,26 @@ def _trip_nights(itin: Itinerary) -> int | None:
 
 
 def build_subject(
-    itineraries: Sequence[Itinerary], bands: PriceBands, *, is_great: bool
+    itineraries: Sequence[Itinerary], bands: PriceBands, *, is_great: bool,
+    verified: Sequence = (),
 ) -> str:
+    """The subject is the only part read on a locked phone screen.
+
+    It must quote the cheapest fare that actually exists, which is Chrome's
+    when it beat the grid - otherwise the phone says $1,635 for a day the
+    email itself is about a $1,347 seat.
+    """
     best = min(itineraries, key=lambda i: i.price_usd)
+    if verified:
+        cheapest_verified = min(verified, key=lambda o: o.price_usd)
+        if cheapest_verified.price_usd < best.price_usd:
+            price = format_price(cheapest_verified.price_usd)
+            band = bands.classify(cheapest_verified.price_usd)
+            dest = cheapest_verified.destination
+            tail = ("book now" if is_great
+                    else f"{len(itineraries) + len(verified)} options")
+            return (f"✈ {price} SJO–{dest} — "
+                    f"{BAND_LABEL[band]}, {tail}")
     band = bands.classify(best.price_usd)
     price = format_price(best.price_usd)
     dest = best.destination
@@ -305,20 +322,25 @@ def render_html(
     dests = sorted({i.destination for i in itineraries})
     dest_txt = "Japan" if len(dests) > 1 else describe_destination(dests[0])
 
-    # In digest mode the email goes out even when nothing clears the
-    # threshold, so a bare "Found 0 options" would bury the one number
-    # that still matters: what the cheapest fare actually is.
-    if n_under:
+    # The headline must count the browser-verified fares too. Built from
+    # the HTTP grid alone it announced "Nothing under $1,400 today"
+    # directly above a block listing five fares at $1,347 and $1,390 -
+    # the email contradicting itself in its first sentence.
+    verified_under = [o for o in verified if o.price_usd <= threshold]
+    total_under = n_under + len(verified_under)
+    cheapest_seen = min([best.price_usd] + [o.price_usd for o in verified])
+
+    if total_under:
         headline = (
-            f"Found {n_under} visa-free option"
-            f"{'s' if n_under != 1 else ''} from San Jos\u00e9 to {dest_txt} "
+            f"Found {total_under} visa-free option"
+            f"{'s' if total_under != 1 else ''} from San Jos\u00e9 to {dest_txt} "
             f"at or under {format_price(threshold)}."
         )
     else:
         headline = (
             f"Nothing under {format_price(threshold)} today \u2014 the "
             f"cheapest visa-free option from San Jos\u00e9 to {dest_txt} "
-            f"is {format_price(best.price_usd)}."
+            f"is {format_price(cheapest_seen)}."
         )
     if is_great:
         headline = (
@@ -656,7 +678,8 @@ def render(
         verified=verified,
     )
     return EmailContent(
-        subject=build_subject(itineraries, bands, is_great=is_great),
+        subject=build_subject(itineraries, bands, is_great=is_great,
+                              verified=verified),
         html=render_html(itineraries, bands, dashboard_url=dashboard_url, **shared),
         text=render_text(itineraries, bands, **shared),
     )

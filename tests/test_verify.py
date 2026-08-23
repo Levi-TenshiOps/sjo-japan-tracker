@@ -292,3 +292,82 @@ class TestBookingLink:
         for o in got:
             assert o.deep_link.startswith("https://www.google.com/travel/flights/search?tfs=")
             assert "curr=USD" in o.deep_link
+
+
+class TestHeadlineAndSubjectAgreeWithTheBlock:
+    """The email must not contradict itself in its first sentence.
+
+    Regression seen in a real preview: the headline read "Nothing under
+    $1,400 today - the cheapest visa-free option is $1,635" directly above
+    a block listing five browser-verified fares at $1,347 and $1,390. The
+    headline and subject were both computed from the HTTP grid alone.
+    """
+
+    def _verified(self, *prices):
+        from tracker.browser import BrowserOption
+        from datetime import timedelta
+        out = []
+        for n, p in enumerate(prices):
+            out.append(BrowserOption(
+                price_usd=p, origin="SJO", destination="TYO",
+                depart_date=date(2027, 1, 22) + timedelta(days=n),
+                return_date=date(2027, 2, 21) + timedelta(days=n),
+                stops=("ZRH",), airlines=("Edelweiss Air", "SWISS"),
+                total_minutes=2780, deep_link="https://x/y"))
+        return out
+
+    def _items(self):
+        from tracker.itinerary import build_itinerary
+        from tests import fixtures as fx
+        return [build_itinerary(fx.ZRH_OPTION, origin="SJO", destination="TYO",
+                                outbound_date=fx.DEPART, return_date=fx.RETURN,
+                                deep_link="https://example.com/a")]
+
+    def test_headline_counts_verified_fares(self):
+        """Fixture is $1,658, so the grid alone clears nothing at $1,400."""
+        from tracker.email_render import render_html
+        from tracker.pricing import SEED_BANDS
+        html = render_html(self._items(), SEED_BANDS, threshold=1400,
+                           is_great=False, generated_at="now",
+                           verified=self._verified(1347, 1347, 1390))
+        assert "Found 3 visa-free options" in html
+        assert "Nothing under" not in html
+
+    def test_no_contradiction_with_the_block_below(self):
+        from tracker.email_render import render_html
+        from tracker.pricing import SEED_BANDS
+        html = render_html(self._items(), SEED_BANDS, threshold=1400,
+                           is_great=False, generated_at="now",
+                           verified=self._verified(1347))
+        assert not ("Nothing under $1,400" in html and "$1,347" in html)
+
+    def test_nothing_under_still_quotes_the_true_cheapest(self):
+        """With no fare under the bar, name the cheapest actually seen."""
+        from tracker.email_render import render_html
+        from tracker.pricing import SEED_BANDS
+        html = render_html(self._items(), SEED_BANDS, threshold=1000,
+                           is_great=False, generated_at="now",
+                           verified=self._verified(1347))
+        assert "Nothing under $1,000" in html
+        assert "is $1,347" in html, "must not quote the dearer grid price"
+
+    def test_subject_quotes_the_verified_price(self):
+        from tracker.email_render import build_subject
+        from tracker.pricing import SEED_BANDS
+        s = build_subject(self._items(), SEED_BANDS, is_great=False,
+                          verified=self._verified(1347))
+        assert "$1,347" in s and "$1,658" not in s
+
+    def test_subject_ignores_verified_when_the_grid_is_cheaper(self):
+        from tracker.email_render import build_subject
+        from tracker.pricing import SEED_BANDS
+        s = build_subject(self._items(), SEED_BANDS, is_great=False,
+                          verified=self._verified(2500))
+        assert "$1,658" in s
+
+    def test_subject_unchanged_with_no_verified_fares(self):
+        from tracker.email_render import build_subject
+        from tracker.pricing import SEED_BANDS
+        assert (build_subject(self._items(), SEED_BANDS, is_great=False)
+                == build_subject(self._items(), SEED_BANDS, is_great=False,
+                                 verified=[]))
