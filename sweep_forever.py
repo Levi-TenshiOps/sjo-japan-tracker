@@ -62,10 +62,10 @@ def build_args() -> argparse.Namespace:
     p.add_argument("-c", "--config", default=config_mod.DEFAULT_CONFIG_PATH)
     p.add_argument("-p", "--preferences", default="preferences.json")
     p.add_argument("--store", default=DEFAULT_STORE)
+    # 90s is ~900 requests a day. The 6s this used before was ~5,800, which
+    # is what got the address throttled.
     p.add_argument("--delay", type=float, default=90.0,
-                   help="seconds between launches (default 90). At 90s
-the sweep makes ~900 requests a day; the 6s it used before
-made ~5,800, which is what got the address throttled.")
+                   help="seconds between launches (default 90, ~900 req/day)")
     p.add_argument("--batch", type=int, default=10,
                    help="windows priced before each save (default 10)")
     p.add_argument("--once", action="store_true", help="one batch, then exit")
