@@ -18,7 +18,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from tracker.preferences import (  # noqa: E402
-    MONTH_NAMES, Preferences, PreferencesError, parse_months, parse_weeks,
+    MAX_PRIORITY_MONTHS, MONTH_NAMES, Preferences, PreferencesError,
+    parse_months, parse_weeks,
 )
 from tracker.schedule import coverage_days, estimate_requests  # noqa: E402
 
@@ -67,9 +68,15 @@ def ask_weeks(prompt: str, default: str) -> list[int]:
 def ask_months(prompt: str, default: str) -> list[int]:
     while True:
         try:
-            return parse_months(ask(prompt, default, allow_blank=True))
+            months = parse_months(ask(prompt, default, allow_blank=True))
         except PreferencesError as exc:
             print(f"     {exc}")
+            continue
+        if len(set(months)) > MAX_PRIORITY_MONTHS:
+            print(f"     Pick at most {MAX_PRIORITY_MONTHS} months - beyond "
+                  f"that the reserved share is under one result row each.")
+            continue
+        return months
 
 
 def ask_int(prompt: str, default: int, lo: int, hi: int) -> int:
@@ -114,7 +121,7 @@ def main() -> int:
     print("     These are searched harder and are guaranteed a share of the")
     print("     results, so a cheap month elsewhere cannot crowd them out.")
     print("     Accepts 'January, February, March' or 'jan feb mar' or '1,2,3'.")
-    print("     Blank for no preference.")
+    print("     Pick 1 to 3 months, or blank for no preference.")
     prefs.priority_months = ask_months(
         "     Priority months",
         ",".join(MONTH_NAMES[m] for m in prefs.priority_months))

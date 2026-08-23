@@ -153,8 +153,17 @@ class TestStructure:
         assert "10 more under" in html
 
     def test_threshold_and_cap_explained(self, content):
+        """The threshold still frames the email; it no longer gates delivery.
+
+        The footer used to promise that silence meant nothing beat the
+        threshold. Under daily_digest that promise is false - two emails
+        arrive regardless - so the wording must not reappear.
+        """
         assert "$1,380" in content.html
-        assert "two per day" in content.html
+        assert "two of these a day" in content.html
+        assert "quiet inbox" not in content.html
+        assert "nothing beat" not in content.html
+        assert "nothing beat" not in content.text
 
 
 class TestPlainText:

@@ -16,7 +16,8 @@ TODAY = date(2026, 8, 22)
 def prefs(**kw):
     base = dict(alert_email="u@e.com", earliest_departure="2027-01-05",
                 latest_departure="2027-03-31", trip_weeks=[2, 3, 4, 5],
-                departure_step_days=3, destinations=["NRT", "HND", "KIX"])
+                departure_step_days=3, destinations=["NRT", "HND", "KIX"],
+                extra_nights=[])   # these tests are about the grid, not fares
     base.update(kw)
     return Preferences(**base)
 
@@ -52,18 +53,30 @@ class TestWindowGeneration:
         ws = generate_windows(prefs(trip_weeks=[2, 2]), today=TODAY)
         assert len({w.key for w in ws}) == len(ws)
 
-    def test_adding_six_weeks_grows_the_space(self):
-        a = len(generate_windows(prefs(trip_weeks=[2, 3, 4, 5]), today=TODAY))
-        b = len(generate_windows(prefs(trip_weeks=[2, 3, 4, 5, 6]), today=TODAY))
+    def test_adding_a_bookable_length_grows_the_space(self):
+        a = len(generate_windows(prefs(trip_weeks=[2, 3]), today=TODAY))
+        b = len(generate_windows(prefs(trip_weeks=[2, 3, 4]), today=TODAY))
         assert b > a
+
+    def test_adding_an_unbookable_length_does_not(self):
+        """Six weeks is past the max-stay rule, so the grid must ignore it."""
+        a = len(generate_windows(prefs(trip_weeks=[2, 3, 4]), today=TODAY))
+        b = len(generate_windows(prefs(trip_weeks=[2, 3, 4, 6]), today=TODAY))
+        assert b == a
 
 
 class TestScale:
     def test_full_scan_would_be_far_too_big(self):
-        """This is the reason rotation exists."""
+        """This is the reason rotation exists.
+
+        Stated against a realistic per-run budget rather than a magic
+        number, so trimming an unbookable trip length does not look like a
+        regression: what matters is that one run cannot cover the space.
+        """
+        budget = 24
         combos, searches = estimate_requests(prefs(), today=TODAY)
-        assert combos > 100
-        assert searches > 300
+        assert combos > budget * 3
+        assert searches > budget * 10
 
     def test_plan_stays_inside_budget(self):
         plan = build_plan(prefs(), request_budget=24, today=TODAY)

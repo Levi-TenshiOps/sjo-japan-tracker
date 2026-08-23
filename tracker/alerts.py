@@ -2,13 +2,21 @@
 
 The rules, in the order they are applied:
 
-1. Nothing at or under the threshold  -> no email. Silence is a valid,
-   expected outcome; the tracker is not meant to chatter.
+1. Nothing at or under the threshold  -> no email, *unless* always_send.
 2. Two emails already sent today      -> no email, ever. Hard cap.
 3. First email of the day             -> send.
 4. Second email of the day            -> only if the price is *materially*
    better than what the first email already told you, and enough time has
    passed. Otherwise the second slot is wasted restating the first.
+
+`always_send` (the daily-digest mode, and the default for this tracker)
+changes rules 1 and 4 only. The price threshold stops gating delivery, so
+the day's two emails arrive whatever the market did, and the second one no
+longer has to prove an improvement to earn its slot. What it does NOT change
+is the cap or the reservation: still at most two, and the second is still
+held until `last_call_hour` so the day's cheapest fare is what fills it.
+A digest that always arrives is only useful if it still carries the best
+number of the day.
 
 "Materially better" means a drop of at least MATERIAL_DROP_PCT or
 MATERIAL_DROP_USD, whichever is easier to clear. Crossing into the GREAT
@@ -97,6 +105,7 @@ def decide(
     min_hours_between: float = MIN_HOURS_BETWEEN,
     reserve_last_slot: bool = True,
     last_call_hour: int = LAST_CALL_HOUR,
+    always_send: bool = False,
 ) -> AlertDecision:
     """Pure decision function. Does not mutate `state`.
 
@@ -116,7 +125,7 @@ def decide(
             False, "no fares returned this run", remaining_today=remaining
         )
 
-    if best_price > good_threshold:
+    if best_price > good_threshold and not always_send:
         return AlertDecision(
             False,
             f"cheapest was ${best_price:,}, above the ${good_threshold:,} threshold",
@@ -179,7 +188,11 @@ def decide(
     drop = prev - best_price
     improved = drop >= min_drop_usd or drop >= prev * min_drop_pct
 
-    if not improved:
+    # In digest mode the second email is owed to the trip owner whatever the
+    # market did, so "no improvement" stops being a reason to stay silent. It
+    # still has to wait for last call below, so what finally goes out is the
+    # day's cheapest, not merely its most recent.
+    if not improved and not always_send:
         return AlertDecision(
             False,
             (
@@ -209,9 +222,18 @@ def decide(
             notes=["held"],
         )
 
+    if drop > 0:
+        reason = f"best of the day at ${best_price:,}, down ${drop:,} from ${prev:,}"
+    elif drop == 0:
+        reason = f"end-of-day digest; ${best_price:,} held all day"
+    else:
+        reason = (
+            f"end-of-day digest; ${best_price:,} is ${-drop:,} above the "
+            f"${prev:,} reported earlier"
+        )
     return AlertDecision(
         True,
-        f"best of the day at ${best_price:,}, down ${drop:,} from ${prev:,}",
+        reason,
         is_great=is_great,
         slot=slot,
         remaining_today=remaining,

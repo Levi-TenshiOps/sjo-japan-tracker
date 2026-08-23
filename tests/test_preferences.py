@@ -14,7 +14,8 @@ def prefs(**kw):
     base = dict(alert_email="user@example.com",
                 earliest_departure="2027-01-05",
                 latest_departure="2027-03-31",
-                trip_weeks=[2, 3, 4, 5])
+                trip_weeks=[2, 3, 4, 5],
+                extra_nights=[])   # tests below are about week conversion
     base.update(kw)
     return Preferences(**base)
 
@@ -61,11 +62,30 @@ class TestNights:
     def test_zero_flex_is_exact(self):
         assert prefs(trip_weeks=[4]).nights_options == [28]
 
-    def test_user_can_later_add_six_weeks(self):
+    def test_six_weeks_is_dropped_not_searched(self):
+        """No round-trip fare exists past MAX_STAY_NIGHTS.
+
+        Measured live: 30n and 31n price fine, 32n and beyond return nothing
+        on every departure date. Searching them is a guaranteed empty.
+        """
         p = prefs(trip_weeks=[2, 3, 4, 5])
         p.trip_weeks = sorted(p.trip_weeks + [6])
         p.validate()
-        assert 42 in p.nights_options
+        assert 42 not in p.nights_options
+        assert 35 not in p.nights_options
+        assert p.dropped_nights == [35, 42]
+        assert p.nights_options == [14, 21, 28]
+
+    def test_extra_nights_reaches_the_max_stay_sweet_spot(self):
+        """30n is inside the rule and was materially cheaper than 28n."""
+        p = prefs(trip_weeks=[2, 3, 4], extra_nights=[30])
+        assert p.nights_options == [14, 21, 28, 30]
+        assert p.dropped_nights == []
+
+    def test_extra_nights_past_the_bound_is_also_dropped(self):
+        p = prefs(trip_weeks=[2], extra_nights=[30, 45])
+        assert p.nights_options == [14, 30]
+        assert p.dropped_nights == [45]
 
 
 class TestValidation:
@@ -145,4 +165,5 @@ class TestDefaults:
 
     def test_describe_is_readable(self):
         text = prefs().describe()
-        assert "2w, 3w, 4w, 5w" in text and "$1,380" in text
+        assert "14n, 21n, 28n" in text and "$1,380" in text
+        assert "35n dropped" in text, "an unsearchable length must be visible"

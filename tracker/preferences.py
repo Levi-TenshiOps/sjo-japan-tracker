@@ -22,6 +22,25 @@ MAX_WEEKS = 12
 MIN_SEARCH_MONTHS = 1
 MAX_SEARCH_MONTHS = 12
 
+# The priority quota reserves priority_share of a fixed 20 result slots.
+# Spread across more than three months that reservation stops meaning
+# anything: each month's guaranteed share shrinks below one row, so the
+# quota degenerates into the plain cheapest-first list it was meant to
+# protect against. One to three months keeps the guarantee real.
+MAX_PRIORITY_MONTHS = 3
+
+# Round-trip economy fares on this route carry a maximum-stay rule. Measured
+# live on 2026-08-22, SJO-TYO departing 2026-11-10:
+#     28n -> 18 options ($1,805)   30n -> 16 options ($1,404)
+#     29n -> 16 options ($1,679)   31n ->  1 option  ($1,722)
+#     32n, 33n, 35n -> nothing at all, on every departure date tried.
+# So a 5-week (35n) round trip is not merely expensive, it does not exist as
+# a fare. Searching one is a guaranteed empty response, and with four trip
+# lengths that was a quarter of every run spent learning nothing. Nights
+# beyond this bound are dropped from the grid; a longer stay needs two
+# one-way tickets, which this tracker does not price.
+MAX_STAY_NIGHTS = 31
+
 MONTH_NAMES = {
     1: "January", 2: "February", 3: "March", 4: "April",
     5: "May", 6: "June", 7: "July", 8: "August",
@@ -64,8 +83,14 @@ class Preferences:
 
     # Acceptable trip lengths, in whole weeks. The trip owner picks these
     # once; editing the list later is a one-line change or a re-run of setup.
-    trip_weeks: list[int] = field(default_factory=lambda: [2, 3, 4, 5])
+    trip_weeks: list[int] = field(default_factory=lambda: [2, 3, 4])
     duration_flex_days: int = 0      # +/- days around each week count
+
+    # Trip lengths in nights that are not whole weeks. 30 earns its place:
+    # it sits just inside the maximum-stay rule above, and in live sampling
+    # it was materially cheaper than 28 nights. Whole weeks alone would step
+    # straight over it.
+    extra_nights: list[int] = field(default_factory=lambda: [30])
 
     good_price_usd: int = 1380
     great_price_usd: int = 1150
@@ -91,6 +116,12 @@ class Preferences:
         for m in self.priority_months:
             if not (1 <= int(m) <= 12):
                 raise PreferencesError(f"{m} is not a month number (1-12)")
+        if len(set(self.priority_months)) > MAX_PRIORITY_MONTHS:
+            raise PreferencesError(
+                f"pick at most {MAX_PRIORITY_MONTHS} priority months "
+                f"(got {len(set(self.priority_months))}); more than that and "
+                f"each month's reserved share drops below a single result row"
+            )
         if not (0.0 <= self.priority_share <= 1.0):
             raise PreferencesError("priority_share must be between 0 and 1")
         if self.result_count < 1:
@@ -150,19 +181,37 @@ class Preferences:
 
     @property
     def nights_options(self) -> list[int]:
-        """Trip lengths in nights, flex applied, sorted and deduplicated."""
+        """Trip lengths in nights, flex applied, sorted and deduplicated.
+
+        Anything past MAX_STAY_NIGHTS is dropped: no round-trip fare exists
+        that long, so those searches return nothing every single time.
+        """
         out: set[int] = set()
         for weeks in self.trip_weeks:
             base = int(weeks) * 7
             for delta in range(-self.duration_flex_days, self.duration_flex_days + 1):
                 if base + delta > 0:
                     out.add(base + delta)
-        return sorted(out)
+        out.update(int(n) for n in self.extra_nights if n > 0)
+        return sorted(n for n in out if n <= MAX_STAY_NIGHTS)
+
+    @property
+    def dropped_nights(self) -> list[int]:
+        """Requested trip lengths that no round-trip fare can satisfy."""
+        out: set[int] = set()
+        for weeks in self.trip_weeks:
+            out.add(int(weeks) * 7)
+        out.update(int(n) for n in self.extra_nights if n > 0)
+        return sorted(n for n in out if n > MAX_STAY_NIGHTS)
 
     def describe(self, today: Date | None = None) -> str:
         early, late = self.window_on(today)
-        weeks = ", ".join(f"{w}w" for w in sorted(self.trip_weeks))
+        weeks = ", ".join(f"{n}n" for n in self.nights_options)
         flex = f" (+/-{self.duration_flex_days}d)" if self.duration_flex_days else ""
+        if self.dropped_nights:
+            flex += ("  [%s dropped: past the %dn max-stay rule]"
+                     % (", ".join(f"{n}n" for n in self.dropped_nights),
+                        MAX_STAY_NIGHTS))
         span = (
             f"next {self.search_months} months ({early} to {late})"
             if self.is_rolling else f"{early} to {late} (pinned)"

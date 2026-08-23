@@ -205,11 +205,14 @@ def run(argv: list[str] | None = None) -> int:
     )
 
     if args.status:
-        combos, full = schedule.estimate_requests(prefs)
+        combos, full = schedule.estimate_requests(prefs, destinations=active)
         gen_days = schedule.coverage_days(plan.slices_total, args.runs_per_day)
         pri_days = schedule.coverage_days(
             plan.priority_slices_total, args.runs_per_day)
         print(prefs.describe())
+        searching = ", ".join(active)
+        print(f"  Searching    : {searching}"
+              + (f"  (on probation: {', '.join(demoted)})" if demoted else ""))
         print(f"  Search space : {combos} windows -> {full} searches "
               f"for a complete pass")
         print(f"  This run     : {plan.describe()}")
@@ -277,12 +280,17 @@ def run(argv: list[str] | None = None) -> int:
                               band_source=bands.source)))
 
     qualifying = [i for i in accepted if i.price_usd <= cfg.good_price_usd]
+    # The fare the email is *about*. Normally the cheapest one clearing the
+    # threshold; in digest mode nothing may clear it, and then the email is
+    # about the cheapest fare found. Never index qualifying[0] directly:
+    # under daily_digest that list is empty on an expensive day.
+    headline_pick = qualifying[0] if qualifying else best
     state = alerts.AlertState.load(cfg.state_file)
     now = datetime.now(CR_TZ)
     decision = alerts.decide(
         state,
-        best_price=qualifying[0].price_usd if qualifying else best.price_usd,
-        best_signature=qualifying[0].signature if qualifying else best.signature,
+        best_price=headline_pick.price_usd,
+        best_signature=headline_pick.signature,
         good_threshold=cfg.good_price_usd,
         great_threshold=cfg.great_price_usd,
         now=now,
@@ -290,6 +298,7 @@ def run(argv: list[str] | None = None) -> int:
         min_drop_pct=cfg.min_drop_pct,
         reserve_last_slot=cfg.reserve_last_slot,
         last_call_hour=cfg.last_call_hour,
+        always_send=cfg.daily_digest,
     )
 
     if not decision.should_send:
@@ -329,14 +338,14 @@ def run(argv: list[str] | None = None) -> int:
     if cfg.ntfy_topic:
         log.info("Push: %s", notify.send_push(
             cfg.ntfy_topic, title=content.subject,
-            body=f"{format_price(qualifying[0].price_usd)} "
-                 f"{qualifying[0].route_label} {qualifying[0].outbound_date}",
-            url=qualifying[0].deep_link, dry_run=args.dry_run).detail)
+            body=f"{format_price(headline_pick.price_usd)} "
+                 f"{headline_pick.route_label} {headline_pick.outbound_date}",
+            url=headline_pick.deep_link, dry_run=args.dry_run).detail)
 
     if result.ok and not args.dry_run:
         alerts.record_sent(
-            state, best_price=qualifying[0].price_usd,
-            best_signature=qualifying[0].signature,
+            state, best_price=headline_pick.price_usd,
+            best_signature=headline_pick.signature,
             is_great=decision.is_great, now=now)
     else:
         state.roll_day(now)

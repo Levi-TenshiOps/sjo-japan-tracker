@@ -40,6 +40,11 @@ from .pricing import (
 
 DEFAULT_ROWS = 20      # the email ranks this many options
 
+# The trip owner is greeted by name every time, in both the HTML and the
+# plain-text part. The kanji is non-ASCII, so anything that renders or
+# transports this string has to be UTF-8 clean end to end.
+GREETING = "Hello Nakama (仲間),"
+
 INK = "#202124"
 MUTED = "#5f6368"
 LINE = "#dadce0"
@@ -295,11 +300,21 @@ def render_html(
     dests = sorted({i.destination for i in itineraries})
     dest_txt = "Japan" if len(dests) > 1 else describe_destination(dests[0])
 
-    headline = (
-        f"Found {n_under} visa-free option"
-        f"{'s' if n_under != 1 else ''} from San Jos\u00e9 to {dest_txt} "
-        f"at or under {format_price(threshold)}."
-    )
+    # In digest mode the email goes out even when nothing clears the
+    # threshold, so a bare "Found 0 options" would bury the one number
+    # that still matters: what the cheapest fare actually is.
+    if n_under:
+        headline = (
+            f"Found {n_under} visa-free option"
+            f"{'s' if n_under != 1 else ''} from San Jos\u00e9 to {dest_txt} "
+            f"at or under {format_price(threshold)}."
+        )
+    else:
+        headline = (
+            f"Nothing under {format_price(threshold)} today \u2014 the "
+            f"cheapest visa-free option from San Jos\u00e9 to {dest_txt} "
+            f"is {format_price(best.price_usd)}."
+        )
     if is_great:
         headline = (
             f"{format_price(best.price_usd)} is a standout price \u2014 "
@@ -393,7 +408,7 @@ def render_html(
         <tr>
           <td class="card" style="background:#ffffff;padding:28px 32px 8px;">
             <p class="ink" style="margin:0 0 14px;font:400 15px/1.6 {FONT};
-                                  color:{INK};">Hello,</p>
+                                  color:{INK};">{escape(GREETING)}</p>
             <p class="ink" style="margin:0 0 4px;font:400 15px/1.6 {FONT};
                                   color:{INK};">{escape(headline)}</p>
             {saving_line}
@@ -445,10 +460,10 @@ def render_html(
           <td class="card" style="background:#ffffff;border-radius:0 0 10px 10px;
                                   padding:18px 32px 26px;">
             <p class="mut" style="margin:0;font:400 12px/1.6 {FONT};color:{MUTED};">
-              Checked {escape(generated_at)}. Alerts are capped at two per day, so
-              a quiet inbox means nothing beat
-              {escape(format_price(threshold))}. Fares move fast \u2014 a listed
-              price is what Google showed at check time, not a held quote.</p>
+              Checked {escape(generated_at)}. You get two of these a day; the
+              second is held until the evening so it carries the day's cheapest
+              fare. Fares move fast \u2014 a listed price is what Google
+              showed at check time, not a held quote.</p>
             {dash}
           </td>
         </tr>
@@ -481,6 +496,8 @@ def render_text(
     lines = [
         "SJO -> JAPAN FLIGHT TRACKER",
         "=" * 46,
+        "",
+        GREETING,
         "",
         f"{sum(1 for i in itineraries if i.price_usd <= threshold)} "
         f"visa-free option(s) at or under {format_price(threshold)}.",
@@ -539,8 +556,8 @@ def render_text(
         f"{format_price(bands.high)}{usual}.",
         SOURCE_NOTE[bands.source],
         "",
-        f"Checked {generated_at}. Max two alerts per day; silence means "
-        f"nothing beat {format_price(threshold)}.",
+        f"Checked {generated_at}. Two emails a day; the second is held "
+        f"until the evening so it carries the day's cheapest fare.",
     ]
     return "\n".join(lines)
 

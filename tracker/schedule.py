@@ -102,11 +102,19 @@ def generate_windows(
 
 
 def estimate_requests(
-    prefs: Preferences, *, today: Date | None = None
+    prefs: Preferences, *, today: Date | None = None,
+    destinations: Sequence[str] | None = None,
 ) -> tuple[int, int]:
-    """(total combinations, searches if you scanned everything at once)."""
+    """(total combinations, searches if you scanned everything at once).
+
+    `destinations` defaults to every configured destination. Pass the
+    *active* ones to exclude any sitting on probation: counting a demoted
+    destination inflates the reported search space by a whole multiple and
+    makes coverage look worse than it is.
+    """
     windows = generate_windows(prefs, today=today)
-    return len(windows), len(windows) * len(prefs.destinations)
+    n_dest = len(prefs.destinations if destinations is None else destinations)
+    return len(windows), len(windows) * n_dest
 
 
 # --- coverage rotation ----------------------------------------------------

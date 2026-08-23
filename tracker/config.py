@@ -69,6 +69,12 @@ class Config:
     reserve_last_slot: bool = True   # hold email 2 for the day's cheapest
     last_call_hour: int = 20         # ...until this hour, Costa Rica time
 
+    # Send both daily emails whatever the price did, instead of only when a
+    # fare clears good_price_usd. The threshold still drives the headline,
+    # the row highlighting and the subject line - it just no longer decides
+    # whether anything is sent at all. The two-per-day cap is unaffected.
+    daily_digest: bool = True
+
     # files
     history_csv: str = "price_history.csv"
     state_file: str = "state.json"
