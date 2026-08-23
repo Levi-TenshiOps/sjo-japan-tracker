@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from datetime import date, timedelta
 import pytest
 
-from tracker.preferences import Preferences
+from tracker.preferences import Preferences, PreferencesError
 from tracker.schedule import (
     RotationState, ScanPlan, Window, build_plan, coverage_days,
     estimate_requests, generate_windows, hot_keys_from_history, take_slice,
@@ -300,3 +300,67 @@ class TestPriorityMonths:
         p = self.rolling(priority_months=list(range(1, 13)))
         plan = build_plan(p, request_budget=24, today=TODAY)
         assert plan.request_estimate >= 20
+
+
+class TestExcludedMonths:
+    """A month the trip owner rules out must cost nothing at all.
+
+    Added 2026-08-23 when September was dropped from the search. The obvious
+    alternative - pinning earliest_departure past it - would silently switch
+    the 8-month window from rolling to fixed, so the horizon would stop
+    moving forward and quietly go stale. Excluding by month number keeps the
+    window rolling.
+    """
+
+    def prefs(self, excluded=(), priority=(1, 2, 3)):
+        return Preferences(
+            alert_email="a@b.c", search_months=8, min_lead_days=21,
+            departure_step_days=1, trip_weeks=[3, 4], extra_nights=[],
+            destinations=["TYO"], priority_months=list(priority),
+            excluded_months=list(excluded))
+
+    def test_no_window_departs_in_an_excluded_month(self):
+        ws = generate_windows(self.prefs(excluded=[9]), today=date(2026, 8, 23))
+        assert ws, "excluding one month must not empty the search"
+        assert not any(w.depart.month == 9 for w in ws)
+
+    def test_the_other_months_are_untouched(self):
+        base = generate_windows(self.prefs(), today=date(2026, 8, 23))
+        cut = generate_windows(self.prefs(excluded=[9]), today=date(2026, 8, 23))
+        assert {w.key for w in cut} == {w.key for w in base if w.depart.month != 9}
+
+    def test_a_trip_returning_in_an_excluded_month_still_counts(self):
+        """Departure month decides. An August trip home in September is an
+        August trip, and excluding September must not delete it."""
+        ws = generate_windows(self.prefs(excluded=[9]), today=date(2026, 8, 23))
+        crossing = [w for w in ws
+                    if w.depart.month == 10 and w.back.month == 11]
+        assert crossing, "windows crossing a month boundary must survive"
+
+    def test_excluding_nothing_changes_nothing(self):
+        a = generate_windows(self.prefs(), today=date(2026, 8, 23))
+        b = generate_windows(self.prefs(excluded=[]), today=date(2026, 8, 23))
+        assert {w.key for w in a} == {w.key for w in b}
+
+    def test_a_month_cannot_be_both_priority_and_excluded(self):
+        with pytest.raises(PreferencesError, match="both a priority and excluded"):
+            self.prefs(excluded=[1], priority=[1, 2, 3]).validate()
+
+    def test_excluding_every_month_is_refused(self):
+        with pytest.raises(PreferencesError, match="nothing to search"):
+            self.prefs(excluded=list(range(1, 13)), priority=[]).validate()
+
+    def test_a_nonsense_month_number_is_refused(self):
+        with pytest.raises(PreferencesError, match="not a month number"):
+            self.prefs(excluded=[13]).validate()
+
+    def test_the_window_stays_rolling(self):
+        """The whole reason for this feature rather than a pinned date."""
+        assert self.prefs(excluded=[9]).is_rolling
+
+    def test_status_names_the_excluded_months(self):
+        text = self.prefs(excluded=[9]).describe(today=date(2026, 8, 23))
+        assert "September" in text and "never searched" in text
+
+    def test_status_stays_quiet_when_nothing_is_excluded(self):
+        assert "Excluded" not in self.prefs().describe(today=date(2026, 8, 23))

@@ -138,12 +138,68 @@ requests a day: each hot window re-priced every ~4 hours, and a full sweep
 of everything else every ~6 days. Both better and six times lighter than
 what came before.
 
-A quarter, not more. There are only ~40 hot windows; a larger share would
-re-price them several times an hour, buying nothing and costing coverage
-everywhere else. And the cold half is not optional - chasing only known
-bargains would never notice a new one appearing somewhere cold. A window
-that has never been priced is always taken when the cursor reaches it, for
-the same reason.
+A quarter was an upper bound, and it is now a *cap* rather than a setting.
+Re-audited 2026-08-23: a quarter is also far more than freshness needs. 41
+hot windows against a 10-hour limit (`sweep_max_age_hours`, past which the
+email drops the row) need 4.1 launches an hour; a 90-second delay supplies
+37.5, so a quarter of them was 9.4 an hour. More than half the hot budget
+was re-pricing windows nowhere near going stale, and every one of those was
+a cold window not covered.
+
+`needed_hot_share` derives it per launch instead, capped at `HOT_SHARE` so
+it can only ever spend less than the old behaviour:
+
+    delay   requests/day   hot share   full pass (3,690 windows)
+      90s            899         11%     5.5d -> 4.6d
+      60s          1,307          8%     3.8d -> 3.1d
+      45s          1,691          6%     2.9d -> 2.3d
+      30s          2,393          4%     2.1d -> 1.6d
+
+It is derived, not tuned, because the inputs move: the hot list grows as
+cheap windows are found, and the rate changes with `--delay`.
+
+One trap here, found by a property test rather than by reading: the share
+becomes an integer launch interval in `next_window`, and rounding that
+interval *up* silently spends less on freshness than was asked for. It
+truncates now, which can only make the interval shorter.
+
+And the cold half is not optional - chasing only known bargains would never
+notice a new one appearing somewhere cold. A window that has never been
+priced is always taken when the cursor reaches it, for the same reason.
+
+## Months can be excluded, and September is
+
+The trip owner ruled September out on 2026-08-23. `excluded_months: [9]` in
+`preferences.json`; no window departing in an excluded month is ever
+generated, so it costs no request and cannot reach the email.
+
+Do not implement this by pinning `earliest_departure`/`latest_departure` to
+cut a month off the front. That silently switches the search window from
+rolling to fixed (`Preferences.is_rolling`), so the 8-month horizon stops
+moving forward and quietly goes stale.
+
+It filters on the *departure* date. A trip leaving in October and returning
+in November is an October trip; excluding November must not delete it.
+
+The resulting sweep order is exactly what was asked for, and falls out of
+`sweep_order` for free once September is gone - priority months first, then
+the rest in date order:
+
+    January -> February -> March -> October -> November -> December -> April
+      558        504        558       558        540        558       414
+
+3,690 windows, down from 4,014.
+
+## Raising the sweep rate
+
+Agreed with the trip owner 2026-08-23: **raise the rate, but only after one
+clean day at 90s.** The table above is the payoff; the risk is that the IP
+is still recovering from the 2026-08-23 throttle, and stepping up into an
+active throttle is what caused it.
+
+The order is 90s -> 45s -> 30s, one step at a time, checking `--status`
+after each. Do not jump straight to 30s, and do not raise it at all while
+the health line reports an empty rate above ~20%.
 
 ## What makes Google block you, in order of importance
 

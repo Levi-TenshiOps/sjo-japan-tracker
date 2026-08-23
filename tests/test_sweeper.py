@@ -976,3 +976,62 @@ class TestARestartJudgesTheConnectionFresh:
         assert looks_throttled(s.recent) is True
         s.forget_stale_health()
         assert looks_throttled(s.recent) is False
+
+
+class TestTheHotShareIsDerivedNotFixed:
+    """Spend on freshness what freshness needs, and no more.
+
+    HOT_SHARE was a flat 0.25, chosen as an upper bound - CLAUDE.md argues
+    only that *more* than a quarter buys nothing. Measured 2026-08-23 it is
+    also far more than is needed: 41 hot windows at a 10-hour freshness
+    limit need 4.1 launches an hour, and a 90-second delay supplies 37.5, so
+    a quarter of them was 9.4 an hour. More than half the hot budget was
+    re-pricing windows nowhere near going stale, and every one of those was
+    a cold window not covered.
+    """
+
+    def test_the_measured_case(self):
+        """41 hot windows at 90s: 11%, not 25%."""
+        share = sweeper.needed_hot_share(41, cycle_s=96.1, freshness_hours=10.0)
+        assert 0.10 <= share <= 0.12, share
+
+    def test_a_faster_sweep_needs_a_smaller_share(self):
+        """The need is a rate, so more launches means a smaller fraction."""
+        slow = sweeper.needed_hot_share(41, cycle_s=96.1)
+        fast = sweeper.needed_hot_share(41, cycle_s=36.1)
+        assert fast < slow
+
+    def test_more_hot_windows_need_a_bigger_share(self):
+        assert (sweeper.needed_hot_share(80, cycle_s=96.1)
+                > sweeper.needed_hot_share(20, cycle_s=96.1))
+
+    def test_it_never_exceeds_the_cap(self):
+        """It may only ever spend less than the old fixed behaviour."""
+        assert sweeper.needed_hot_share(10_000, cycle_s=96.1) == sweeper.HOT_SHARE
+        assert sweeper.needed_hot_share(500, cycle_s=3600.0) <= sweeper.HOT_SHARE
+
+    def test_no_hot_windows_means_no_hot_budget(self):
+        assert sweeper.needed_hot_share(0, cycle_s=96.1) == 0.0
+
+    def test_degenerate_inputs_do_not_explode(self):
+        assert sweeper.needed_hot_share(41, cycle_s=0) == 0.0
+        assert sweeper.needed_hot_share(41, cycle_s=96.1, freshness_hours=0) == 0.0
+
+    @pytest.mark.parametrize("n_hot", [5, 20, 41, 60, 90])
+    @pytest.mark.parametrize("delay", [90.0, 60.0, 45.0, 30.0])
+    def test_every_hot_window_is_refreshed_before_it_goes_stale(self, n_hot, delay):
+        """The property that actually matters, including the quantisation.
+
+        `next_window` turns the share into an integer launch interval, so
+        the check has to be done on that interval, not on the raw fraction -
+        rounding it up would silently under-spend on freshness.
+        """
+        cycle, fresh = delay + sweeper.LAUNCH_SECONDS, 10.0
+        share = sweeper.needed_hot_share(n_hot, cycle_s=cycle,
+                                         freshness_hours=fresh)
+        every = max(int(1 / max(share, 0.01)), 2)      # as next_window does
+        launches = fresh * 3600 / cycle
+        refreshed = launches / every
+        assert refreshed >= n_hot, (
+            f"{n_hot} hot windows, 1-in-{every} launches: only {refreshed:.0f} "
+            f"re-priced in {fresh}h - some would go stale")

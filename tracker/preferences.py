@@ -86,6 +86,19 @@ class Preferences:
     priority_share: float = 0.5      # minimum fraction of results from them
     result_count: int = 20           # how many options the email ranks
 
+    # Calendar months to leave out of the search entirely (1 = January).
+    # Every window departing in one of these is never generated, so it costs
+    # no request and cannot appear in the email.
+    #
+    # This exists because the alternative - pinning `earliest_departure` and
+    # `latest_departure` to cut a month off the front - silently switches the
+    # search window from rolling to fixed (`Preferences.rolling`), so the
+    # 8-month horizon would stop moving forward and quietly go stale.
+    #
+    # Excluding a month is a real reduction in coverage. It is the trip
+    # owner's call, not an optimisation to apply on their behalf.
+    excluded_months: list[int] = field(default_factory=list)
+
     # Acceptable trip lengths, in whole weeks. The trip owner picks these
     # once; editing the list later is a one-line change or a re-run of setup.
     trip_weeks: list[int] = field(default_factory=lambda: [2, 3, 4])
@@ -127,6 +140,17 @@ class Preferences:
                 f"(got {len(set(self.priority_months))}); more than that and "
                 f"each month's reserved share drops below a single result row"
             )
+        for m in self.excluded_months:
+            if not (1 <= int(m) <= 12):
+                raise PreferencesError(f"{m} is not a month number (1-12)")
+        clash = set(self.excluded_months) & set(self.priority_months)
+        if clash:
+            raise PreferencesError(
+                f"month(s) {sorted(clash)} are both a priority and excluded; "
+                f"a month cannot be searched harder and not at all"
+            )
+        if len(set(self.excluded_months)) >= 12:
+            raise PreferencesError("every month is excluded; nothing to search")
         if not (0.0 <= self.priority_share <= 1.0):
             raise PreferencesError("priority_share must be between 0 and 1")
         if self.result_count < 1:
@@ -178,6 +202,16 @@ class Preferences:
     def is_priority_month(self, d: Date) -> bool:
         return d.month in set(self.priority_months)
 
+    def is_excluded_month(self, d: Date) -> bool:
+        return d.month in set(self.excluded_months)
+
+    @property
+    def excluded_label(self) -> str:
+        if not self.excluded_months:
+            return "none"
+        return ", ".join(MONTH_NAMES[int(m)]
+                         for m in sorted(set(self.excluded_months)))
+
     @property
     def priority_label(self) -> str:
         if not self.priority_months:
@@ -227,7 +261,10 @@ class Preferences:
             f"  Trip lengths : {weeks}{flex}\n"
             f"  Priority     : {self.priority_label} "
             f"(at least {pct}% of the {self.result_count} results)\n"
-            f"  Destinations : {', '.join(self.destinations)}\n"
+            + (f"  Excluded     : {self.excluded_label} "
+               f"(never searched, never emailed)\n"
+               if self.excluded_months else "")
+            + f"  Destinations : {', '.join(self.destinations)}\n"
             f"  Alert under  : ${self.good_price_usd:,} "
             f"(standout ${self.great_price_usd:,})"
         )

@@ -332,6 +332,41 @@ def hot_keys(store: "SweepStore", *, threshold: int | None = None,
     return [k for p, k in sorted(priced) if p <= ceiling]
 
 
+# A Chrome launch that renders a real result page, measured on this machine.
+# Used to turn a delay into a launch rate.
+LAUNCH_SECONDS = 6.1
+# A swept price older than this is dropped from the email (config's
+# `sweep_max_age_hours`), so it is exactly how fresh a hot window must be.
+HOT_FRESHNESS_HOURS = 10.0
+
+
+def needed_hot_share(n_hot: int, *, cycle_s: float,
+                     freshness_hours: float = HOT_FRESHNESS_HOURS,
+                     cap: float = HOT_SHARE) -> float:
+    """The smallest hot share that still keeps every hot window fresh.
+
+    `HOT_SHARE` was a flat 0.25, chosen as an upper bound - the note in
+    CLAUDE.md argues only that *more* than a quarter buys nothing. Measured
+    2026-08-23, it is also far more than is needed: 41 hot windows at a
+    10-hour freshness limit need 4.1 launches an hour, and a 90-second delay
+    supplies 37.5. A quarter of those is 9.4 an hour, so more than half the
+    hot budget was re-pricing windows that were not close to going stale.
+
+    That excess is not free. Every hot launch is a cold window not covered,
+    so it lengthened a full pass from 4.6 days to 5.5 at no benefit, and the
+    gap widens as the delay drops - at 30 seconds the need is 4%, not 25%.
+
+    Derived per launch rather than fixed, because the inputs move: the hot
+    list grows as cheap windows are found, and the rate changes with
+    `--delay`. Capped at `HOT_SHARE` so this can never spend *more* than the
+    old behaviour, only less.
+    """
+    if n_hot <= 0 or cycle_s <= 0 or freshness_hours <= 0:
+        return 0.0
+    launches_per_hour = 3600.0 / cycle_s
+    return min(cap, (n_hot / freshness_hours) / launches_per_hour)
+
+
 def next_window(windows: Sequence, store: "SweepStore", *,
                 threshold: int | None = None, hot_share: float = HOT_SHARE):
     """The next window to price: (window, was_hot).
@@ -351,7 +386,12 @@ def next_window(windows: Sequence, store: "SweepStore", *,
     # Deterministic interleave: every Nth launch is a hot one. Rotating
     # through the hot list rather than always taking the cheapest keeps the
     # whole hot set fresh instead of one window.
-    every = max(int(round(1 / max(hot_share, 0.01))), 2)
+    # Truncate rather than round. `every` is the launch interval, so
+    # rounding it *up* silently spends less on freshness than asked for and
+    # a hot window can age past the limit the share was derived from.
+    # Truncating can only ever make the interval shorter, i.e. err towards
+    # fresher, which is the safe direction.
+    every = max(int(1 / max(hot_share, 0.01)), 2)
     if store.windows_priced % every == 0:
         by_key = {w.key: w for w in windows}
         picks = [by_key[k] for k in hot if k in by_key]
@@ -528,8 +568,13 @@ def sweep_batch(
         else:
             # Hot windows are re-priced out of turn and must not consume the
             # cold cursor, or coverage would stall on the cheap ones.
+            # Spend only what freshness actually requires; the rest goes
+            # on coverage. `hot_share` is the ceiling, not the setting.
+            share = needed_hot_share(
+                len(hot_keys(store, threshold=hot_threshold)),
+                cycle_s=delay_s + LAUNCH_SECONDS, cap=hot_share)
             w, was_hot = next_window(windows, store, threshold=hot_threshold,
-                                     hot_share=hot_share)
+                                     hot_share=share)
             if w is None:
                 break
             replay = was_hot

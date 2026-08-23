@@ -91,6 +91,14 @@ def generate_windows(
     seen: set[str] = set()
     day = snap_to_grid(floor, step)
     while day <= latest:
+        # A month the trip owner ruled out never becomes a window, so it
+        # costs no request and cannot reach the email. Filtering on the
+        # *departure* date is deliberate: a trip that leaves in October and
+        # returns in November is an October trip, and excluding November
+        # must not silently delete it.
+        if prefs.is_excluded_month(day):
+            day += timedelta(days=step)
+            continue
         for nights in nights_options:
             w = Window(day, day + timedelta(days=nights),
                        priority=prefs.is_priority_month(day))
