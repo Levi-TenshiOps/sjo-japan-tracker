@@ -180,6 +180,24 @@ def run(argv: list[str] | None = None) -> int:
     rotation = schedule.RotationState.load(cfg.rotation_file)
     budget = args.budget or throttle_state.budget
 
+    # Read the sweep store before planning: if it is feeding us, the grid's
+    # coverage role is redundant and its budget can be cut to what the email
+    # table needs. If the sweep is down, the grid is the only thing standing
+    # between the trip owner and no email at all, so it keeps its full budget.
+    try:
+        _store = sweeper.SweepStore.load(cfg.sweep_store)
+        _swept = _store.best(limit=200, max_age_hours=cfg.sweep_max_age_hours)
+    except Exception:                       # noqa: BLE001
+        _swept = []
+    sweep_is_healthy = len(_swept) >= cfg.swept_enough
+    if sweep_is_healthy:
+        budget = min(budget, cfg.grid_budget_when_swept)
+        log.info("Sweep has %d fresh finding(s); trimming the grid to %d request(s)",
+                 len(_swept), budget)
+    else:
+        log.info("Sweep has only %d fresh finding(s); running the full grid",
+                 len(_swept))
+
     rows = [] if args.no_history else _read_rows(cfg.history_csv)
     hot = schedule.hot_keys_from_history(rows, limit=cfg.hot_list_size)
 

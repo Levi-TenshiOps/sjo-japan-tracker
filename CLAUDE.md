@@ -43,6 +43,40 @@ remains is live verification, not a rewrite.
    parameters only; `preferences.json` and `.env` are gitignored. The
    repository must stay publishable as-is.
 
+## Why the HTTP grid is kept, though it cannot find a bargain
+
+It was audited for removal on 2026-08-23 and survived, but only just, and
+for reasons that have nothing to do with finding cheap fares.
+
+Across the 70 windows it has priced, the grid found **zero** fares at or
+under the $1,400 alert threshold. Its cheapest ever is $1,635 against
+Chrome's $1,347. It wins occasionally on a shared window - 7 of 31 - but
+every one of those wins landed between $2,133 and $2,398, far above
+anything that could trigger an alert, and most likely reflects the two
+methods pricing at different moments rather than a real advantage.
+
+So its *coverage* role is finished: the sweep prices every window through
+Chrome, which sees the European routings the grid structurally cannot.
+
+Two things keep it alive:
+
+* It is the only thing that produces an email when the sweep is down. The
+  run aborts on an empty `accepted` list, so without the grid a stopped
+  sweeper means silence rather than a thinner email.
+* Its rows are real, bookable fares. They are never the cheapest, but they
+  give the market some shape beside the verified block.
+
+The compromise is `grid_budget_when_swept`. When the sweep has at least
+`swept_enough` fresh findings the grid is cut to roughly what filling the
+email table needs (16 requests at a measured ~1.4 usable options each);
+when the sweep is quiet it keeps its full budget and carries the email
+alone. The trim only ever lowers the budget, so an already-throttled run
+is not pushed back up.
+
+Combined effect of the tiering and this trim: **~7,570 requests a day down
+to ~1,260, an 83% reduction**, while the fares that can actually alert are
+checked more often than before.
+
 ## The sweep is tiered, because most windows can never matter
 
 Measured 2026-08-23 across 400 priced windows:

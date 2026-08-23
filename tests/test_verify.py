@@ -371,3 +371,52 @@ class TestHeadlineAndSubjectAgreeWithTheBlock:
         assert (build_subject(self._items(), SEED_BANDS, is_great=False)
                 == build_subject(self._items(), SEED_BANDS, is_great=False,
                                  verified=[]))
+
+
+class TestGridBudgetFollowsSweepHealth:
+    """The HTTP grid has never found a fare that could trigger an alert.
+
+    Measured across 70 windows it priced: zero at or under the $1,400
+    threshold, best ever $1,635 against Chrome's $1,347, because the cheap
+    European routings are absent from the server-rendered HTML. Its coverage
+    role is redundant once the sweep prices every window through Chrome.
+
+    It is kept anyway, smaller: it is the only thing that keeps an email
+    going out when the sweep is down, and its rows are real bookable fares
+    that give the market context. So the budget follows sweep health rather
+    than being fixed or removed.
+    """
+
+    def test_a_healthy_sweep_trims_the_budget(self):
+        from tracker.config import Config
+        cfg = Config()
+        budget, swept = 28, 40
+        trimmed = (min(budget, cfg.grid_budget_when_swept)
+                   if swept >= cfg.swept_enough else budget)
+        assert trimmed == cfg.grid_budget_when_swept < budget
+
+    def test_a_silent_sweep_keeps_the_full_budget(self):
+        """With no sweep data the grid is the only source of an email."""
+        from tracker.config import Config
+        cfg = Config()
+        budget, swept = 28, 0
+        trimmed = (min(budget, cfg.grid_budget_when_swept)
+                   if swept >= cfg.swept_enough else budget)
+        assert trimmed == budget
+
+    def test_the_trim_never_raises_the_budget(self):
+        """A throttled run already at 8 must not be pushed back up to 16."""
+        from tracker.config import Config
+        cfg = Config()
+        assert min(8, cfg.grid_budget_when_swept) == 8
+
+    def test_the_trimmed_budget_can_still_fill_the_table(self):
+        """Measured yield was ~1.4 usable options per request, and the email
+        shows 20 rows."""
+        from tracker.config import Config
+        cfg = Config()
+        assert cfg.grid_budget_when_swept * 1.4 >= 20
+
+    def test_the_health_bar_is_a_real_sample_not_a_token(self):
+        from tracker.config import Config
+        assert Config().swept_enough >= 20

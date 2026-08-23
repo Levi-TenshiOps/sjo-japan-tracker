@@ -125,6 +125,20 @@ class Config:
     # the scheduled tracker six times a day, so without this they overlap
     # roughly every four hours - and the symptom is silence, not an error.
     google_lock: str = "google.lock"
+
+    # The HTTP grid has never found a fare that could trigger an alert -
+    # 0 of 70 windows at or under the threshold, best ever $1,635 against
+    # Chrome's $1,347 - because the cheap European routings are absent from
+    # the server-rendered HTML. Its *coverage* role is therefore entirely
+    # redundant now the sweep prices every window through Chrome.
+    #
+    # It is not removed, for two reasons. It is the only thing that keeps an
+    # email going out when the sweep is down, and its rows are real
+    # bookable fares that give the market some context even if they are
+    # never the cheapest. So it is cut back to roughly what filling the
+    # email table needs, and only when the sweep is actually feeding us.
+    grid_budget_when_swept: int = 16
+    swept_enough: int = 25          # fresh findings that count as "sweep is working"
     # How stale a swept price may be before the email stops showing it. The
     # store keeps findings for longer so the sweep can tell what it has
     # already seen, but a price is a snapshot: presenting a day-old number
