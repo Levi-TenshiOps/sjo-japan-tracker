@@ -54,16 +54,29 @@ def _alive(pid: int) -> bool:
     """Is that process still running? Conservative: unsure means yes."""
     if pid <= 0:
         return False
-    try:
-        if os.name == "nt":
+    if os.name == "nt":
+        try:
             out = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
                 capture_output=True, text=True, timeout=10)
             return str(pid) in (out.stdout or "")
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return True    # cannot tell - do not steal the lock on a guess
+    try:
         os.kill(pid, 0)
-        return True
-    except (OSError, ValueError, subprocess.SubprocessError):
+    except ProcessLookupError:
+        # Definitive: no such process. This used to fall into the catch-all
+        # below and come back True, so on POSIX a lock left by a dead holder
+        # was never detected as stale - the next caller sat out the whole
+        # 300-second timeout and only then proceeded. Windows took the
+        # tasklist branch and worked, which is exactly why it survived: the
+        # deployment machine is Windows and only CI ever ran the other path.
+        return False
+    except PermissionError:
+        return True        # it exists, it is just not ours to signal
+    except (OSError, ValueError):
         return True        # cannot tell - do not steal the lock on a guess
+    return True
 
 
 def _read(path: Path) -> dict | None:

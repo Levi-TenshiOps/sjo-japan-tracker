@@ -13,6 +13,7 @@ import time
 
 import pytest
 
+from tracker import gate as gate_mod
 from tracker.gate import (
     Heartbeat, google, holder, is_stale,
 )
@@ -130,3 +131,71 @@ class TestTimeoutBehaviour:
         with google("run", path=lock, timeout=30.0):
             pass
         assert time.monotonic() - start < 1.0
+
+
+class TestLivenessOnPosix:
+    """`_alive` must give a definitive answer when POSIX gives it one.
+
+    Found 2026-08-23 by CI, which is the only place the POSIX branch runs -
+    the deployment machine is Windows and takes the `tasklist` path. On
+    Linux `os.kill(dead_pid, 0)` raises ProcessLookupError, which the old
+    blanket `except OSError: return True` swallowed into "assume alive". So
+    a lock left behind by a dead process was never stale, and the next
+    caller waited out the full 300-second timeout before proceeding.
+
+    That is also why the CI job took five minutes to fail: three tests each
+    sat through a 300s wait that should have been instant.
+    """
+
+    def _posix(self, monkeypatch):
+        monkeypatch.setattr(gate_mod.os, "name", "posix")
+
+    def test_a_dead_pid_is_definitively_not_alive(self, monkeypatch):
+        self._posix(monkeypatch)
+
+        def gone(pid, sig):
+            raise ProcessLookupError()
+
+        monkeypatch.setattr(gate_mod.os, "kill", gone)
+        assert gate_mod._alive(999_999) is False
+
+    def test_a_pid_we_may_not_signal_is_alive(self, monkeypatch):
+        """EPERM means it exists and belongs to somebody else."""
+        self._posix(monkeypatch)
+
+        def denied(pid, sig):
+            raise PermissionError()
+
+        monkeypatch.setattr(gate_mod.os, "kill", denied)
+        assert gate_mod._alive(1) is True
+
+    def test_an_unclear_error_still_assumes_alive(self, monkeypatch):
+        """Never steal a lock on a guess."""
+        self._posix(monkeypatch)
+
+        def odd(pid, sig):
+            raise OSError("something else entirely")
+
+        monkeypatch.setattr(gate_mod.os, "kill", odd)
+        assert gate_mod._alive(1) is True
+
+    def test_a_signalable_pid_is_alive(self, monkeypatch):
+        self._posix(monkeypatch)
+        monkeypatch.setattr(gate_mod.os, "kill", lambda pid, sig: None)
+        assert gate_mod._alive(1) is True
+
+
+class TestAStaleLockCostsNoWait:
+    def test_breaking_a_stale_lock_is_immediate(self, lock):
+        """The symptom that made CI take five minutes instead of seconds.
+
+        A dead holder must be detected and its lock broken at once, not
+        waited out for the default 300-second timeout.
+        """
+        lock.write_text(json.dumps(
+            {"pid": 999_999, "owner": "ghost", "beat": time.time()}),
+            encoding="utf-8")
+        start = time.monotonic()
+        with google("run", path=lock):
+            pass
+        assert time.monotonic() - start < 5.0
