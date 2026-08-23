@@ -210,6 +210,32 @@ class SweepStore:
         self.found[d.key] = asdict(d)
         return True
 
+    def forget_stale_health(self, *, max_idle_hours: float = 0.5,
+                            now: datetime | None = None) -> bool:
+        """Drop connection-health samples that describe a different day.
+
+        `recent` persists with the store, and it is the *only* input to
+        `looks_throttled`. So a sweep stopped while throttled comes back up,
+        reads yesterday's empty samples, concludes it is throttled before
+        making a single request, and drops straight into 4x backoff - one
+        window every six minutes - on a connection that may be perfectly
+        healthy. Worse, it cannot clear that verdict until it has priced 20
+        fresh windows, which at six minutes each is two hours of crawling
+        to disprove something it never checked.
+
+        Findings are untouched. A price is still a price; it is only the
+        judgement about the *connection* that goes stale, and it goes stale
+        fast. Returns True if anything was forgotten.
+        """
+        if not (self.recent or self.throttled_since):
+            return False
+        if _age_hours(self.last_active, now) <= max_idle_hours:
+            return False
+        self.recent.clear()
+        self.throttled_since = ""
+        self.consecutive_rests = 0
+        return True
+
     def prune(self, *, max_entries: int = MAX_ENTRIES,
               drop_after_hours: float = DROP_AFTER_HOURS,
               now: datetime | None = None) -> int:

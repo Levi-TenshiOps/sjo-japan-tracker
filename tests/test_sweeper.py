@@ -923,3 +923,56 @@ class TestCtrlCWorksDuringAThrottleRest:
                              should_stop=should_stop)
         assert 0 < priced < 10
         assert s.cursor == priced, "the cursor must still be saveable"
+
+
+class TestARestartJudgesTheConnectionFresh:
+    """Health samples describe a moment, and the moment passes.
+
+    The trip owner is told to stop the sweep when Google throttles and
+    restart it later. Without this, doing exactly that is punished: `recent`
+    persists, `looks_throttled` reads it before a single request is made,
+    and the sweep starts in 4x backoff - one window every six minutes - on a
+    connection that has had all night to recover. Clearing the verdict then
+    takes 20 fresh windows, i.e. two hours.
+    """
+
+    def _stale(self, hours):
+        when = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        # 1 means "came back empty" - that is the throttle signal.
+        return SweepStore(recent=[1] * 20, throttled_since=when,
+                          consecutive_rests=3, last_active=when)
+
+    def test_old_samples_are_forgotten(self):
+        s = self._stale(12)
+        assert s.forget_stale_health() is True
+        assert s.recent == [] and s.throttled_since == ""
+        assert s.consecutive_rests == 0
+
+    def test_a_sweep_that_only_just_stopped_keeps_its_verdict(self):
+        """A restart seconds later must not wipe a real, current throttle."""
+        s = self._stale(0.01)
+        assert s.forget_stale_health() is False
+        assert len(s.recent) == 20 and s.throttled_since
+
+    def test_findings_are_never_touched(self, dom):
+        """A price is still a price; only the connection verdict goes stale."""
+        s = self._stale(12)
+        sweep_batch(windows(1), s, batch=1, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        before = dict(s.found)
+        s.last_active = (datetime.now(timezone.utc)
+                         - timedelta(hours=12)).isoformat()
+        s.forget_stale_health()
+        assert s.found == before and before != {}
+
+    def test_a_clean_store_is_left_alone(self):
+        s = SweepStore()
+        assert s.forget_stale_health() is False
+
+    def test_forgetting_makes_the_sweep_look_healthy_again(self):
+        """The point of the exercise."""
+        from tracker.sweeper import looks_throttled
+        s = self._stale(12)
+        assert looks_throttled(s.recent) is True
+        s.forget_stale_health()
+        assert looks_throttled(s.recent) is False

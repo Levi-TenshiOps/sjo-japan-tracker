@@ -110,6 +110,13 @@ def main() -> int:
     windows = sweep_order(generate_windows(prefs, today=Date.today()))
     store = SweepStore.load(args.store)
 
+    # A restart after a gap judges the connection fresh. Without this a
+    # sweep stopped while throttled comes straight back up in 4x backoff on
+    # yesterday's evidence, and needs two hours of crawling to disprove it.
+    if not args.status and store.forget_stale_health():
+        log.info("Idle a while; forgetting the old connection-health "
+                 "samples and judging this stretch fresh.")
+
     if args.status:
         print(store.progress(len(windows)))
         print(store.health())
