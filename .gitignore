@@ -32,6 +32,9 @@ has32.html
 # is the trimmed fixture the browser tests need and IS tracked.
 /chrome*.html
 /chrome*.err
+/sent-email.html
+/morning-preview.html
+/test.html
 /knows.html
 /nlq_payload.html
 discoveries.json
