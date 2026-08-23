@@ -114,6 +114,19 @@ answers and threw them away. They are now kept in `month_hints.json` and
 printed by `cli.py --status`, so the 8-month picture arrives in hours
 instead of waiting ~3.5 days for the sweep's cold half.
 
+**It paid off on the first run.** The 15:45 pass on 2026-08-23 recorded:
+
+    February 2027   $1,347   2027-01-29 -> 2027-02-25
+    December 2026   $1,432   2026-11-30 -> 2026-12-29
+    October  2026   $1,604   2026-09-30 -> 2026-10-30
+
+December is the point. $1,432 is cheaper than every window the sweep had
+found outside its top five, Chrome confirmed it on the spot (14 options, 11
+visa-rejected, cheapest usable $1,432) - and the sweep had never priced a
+single December window and would not have for another 3.5 days. So the
+cheap fares are *not* confined to January and February. Do not re-derive
+that claim from whatever the sweep happens to have covered.
+
 Sweeping all 4,014 windows at equal priority still spent about 96% of its
 requests on dates that were not producing alerts - roughly 5,800 requests a
 day to one address, which is what got it throttled.
