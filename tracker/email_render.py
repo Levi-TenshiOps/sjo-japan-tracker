@@ -278,7 +278,9 @@ def render_html(
     priority_months: Sequence[int] = (),
     priority_share: float = 0.5,
     priority_label: str = "",
+    verified: Sequence = (),
 ) -> str:
+    verified_html = verified_block_html(verified, threshold)
     selection, n_under = rank_for_email(
         itineraries, threshold=threshold, count=count,
         priority_months=priority_months, priority_share=priority_share,
@@ -414,6 +416,7 @@ def render_html(
             {saving_line}
           </td>
         </tr>
+        {verified_html}
 
         <tr>
           <td class="card" style="background:#ffffff;padding:14px 32px 0;">
@@ -490,6 +493,7 @@ def render_text(
     priority_months: Sequence[int] = (),
     priority_share: float = 0.5,
     priority_label: str = "",
+    verified: Sequence = (),
 ) -> str:
     best = min(itineraries, key=lambda i: i.price_usd)
     band = bands.classify(best.price_usd)
@@ -499,6 +503,7 @@ def render_text(
         "",
         GREETING,
         "",
+        *verified_block_text(verified, threshold),
         f"{sum(1 for i in itineraries if i.price_usd <= threshold)} "
         f"visa-free option(s) at or under {format_price(threshold)}.",
         f"Cheapest: {format_price(best.price_usd)} "
@@ -562,6 +567,62 @@ def render_text(
     return "\n".join(lines)
 
 
+def verified_block_html(verified, threshold: int) -> str:
+    """The Chrome-verified fares, above everything else in the email.
+
+    These are the numbers the trip owner actually acts on: the HTTP grid
+    cannot see the Zurich routings, so on the target window it reported
+    $1,635 while the truth was $1,347. When the two disagree, this is the
+    one that is right, so it goes first and says where it came from.
+    """
+    if not verified:
+        return ""
+    rows = []
+    for o in verified[:6]:
+        hrs, mins = divmod(o.total_minutes, 60)
+        under = o.price_usd <= threshold
+        colour = GREEN if under else INK
+        link = (f'<a href="{escape(o.deep_link)}" '
+                f'style="color:#1a73e8;text-decoration:none;">View</a>'
+                if o.deep_link else "")
+        rows.append(
+            f'<tr>'
+            f'<td style="padding:8px 12px 8px 0;font:700 16px/1.4 {FONT};'
+            f'color:{colour};white-space:nowrap;">{escape(format_price(o.price_usd))}</td>'
+            f'<td style="padding:8px 12px 8px 0;font:400 13px/1.5 {FONT};color:{INK};">'
+            f'{escape(o.route_label)}<br>'
+            f'<span style="color:{MUTED};">{escape(str(o.depart_date))} to '
+            f'{escape(str(o.return_date))} &middot; {o.nights} nights &middot; '
+            f'{hrs} hr {mins} min &middot; {escape(", ".join(o.airlines))}</span></td>'
+            f'<td style="padding:8px 0;font:400 13px/1.5 {FONT};text-align:right;">'
+            f'{link}</td></tr>')
+    return (
+        f'<tr><td class="card" style="background:#ffffff;padding:4px 32px 18px;">'
+        f'<p style="margin:0 0 8px;font:700 13px/1.5 {FONT};color:{INK};">'
+        f'Verified in a real browser</p>'
+        f'<p style="margin:0 0 10px;font:400 12px/1.5 {FONT};color:{MUTED};">'
+        f'Google hides some of its cheapest routings from the quick search. '
+        f'These were re-checked the slow way and are visa-free.</p>'
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+        f'width="100%">{"".join(rows)}</table></td></tr>')
+
+
+def verified_block_text(verified, threshold: int) -> list[str]:
+    if not verified:
+        return []
+    lines = ["VERIFIED IN A REAL BROWSER", "-" * 46]
+    for o in verified[:6]:
+        hrs, mins = divmod(o.total_minutes, 60)
+        flag = "  <-- under your threshold" if o.price_usd <= threshold else ""
+        lines.append(f"{format_price(o.price_usd)}  {o.route_label}{flag}")
+        lines.append(f"    {o.depart_date} to {o.return_date} ({o.nights}n), "
+                     f"{hrs} hr {mins} min, {', '.join(o.airlines)}")
+        if o.deep_link:
+            lines.append(f"    {o.deep_link}")
+    lines.append("")
+    return lines
+
+
 def render(
     itineraries: Sequence[Itinerary],
     bands: PriceBands,
@@ -574,6 +635,7 @@ def render(
     priority_months: Sequence[int] = (),
     priority_share: float = 0.5,
     priority_label: str = "",
+    verified: Sequence = (),
 ) -> EmailContent:
     if not itineraries:
         raise ValueError("refusing to render an email with no itineraries")
@@ -581,6 +643,7 @@ def render(
         threshold=threshold, is_great=is_great, generated_at=generated_at,
         count=count, priority_months=priority_months,
         priority_share=priority_share, priority_label=priority_label,
+        verified=verified,
     )
     return EmailContent(
         subject=build_subject(itineraries, bands, is_great=is_great),

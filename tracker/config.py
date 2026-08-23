@@ -71,6 +71,18 @@ class Config:
     monthly_scan: bool = True
     monthly_scan_destination: str = "NRT"
 
+    # Chrome verification. Plain HTTP does not just miss long stays: on
+    # 2027-01-29 -> 2027-02-25 it reported a cheapest of $1,635 while the
+    # real cheapest was $1,347 on Edelweiss/SWISS via Zurich - a routing
+    # absent from the server-rendered HTML entirely. So every window we
+    # actually care about gets re-priced through Chrome, which sees it.
+    # A launch costs ~25s against ~3s, hence a small explicit budget.
+    chrome_verify: bool = True
+    chrome_path: str = ""              # blank = autodetect
+    chrome_max_per_run: int = 10
+    chrome_timeout_s: int = 120
+    chrome_budget_ms: int = 30000
+
     # alert sensitivity
     min_drop_usd: int = 25
     min_drop_pct: float = 0.02

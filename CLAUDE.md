@@ -140,6 +140,35 @@ fare does not exist.** It proves only that this fetch method did not see
 one. Never infer a fare rule from silence again. `MAX_STAY_NIGHTS` is now
 60 and exists only to stop a typo generating a useless grid.
 
+**The HTTP fetch systematically misses the cheapest fares.** This is the
+single most important thing in this file. It is not only long stays: on the
+trip owner's own target window, SJO-Tokyo 2027-01-29 to 2027-02-25 (27
+nights, comfortably inside the grid), the HTTP grid reported a cheapest of
+$1,635 via Frankfurt. The real cheapest was **$1,347** on Edelweiss/SWISS
+via Zurich, 46 hr 20 min, confirmed on Google's own booking page. That
+routing does not appear in the server-rendered HTML at any stop limit, in
+any currency or locale.
+
+Since the alert threshold is $1,400, the fares worth emailing are precisely
+the ones HTTP cannot see. A tracker built on HTTP alone is not incomplete,
+it is wrong in the only direction that matters.
+
+`tracker/browser.py` fixes it with Chrome's own `--headless --dump-dom`, so
+there is no new Python dependency — `selectolax` already ships with
+fast-flights. A launch costs ~25s against ~3s, so `tracker/verify.py`
+spends a small fixed budget (`chrome_max_per_run`) on the windows most
+likely to be cheap: wide-net hints first, then the hot list, then the
+grid's best guess. Chrome's answer wins whenever it is lower, and it drives
+both the alert price and a dedicated block at the top of the email.
+
+`--dump-dom` returns the collapsed result list, so an option carries price,
+airline, total duration and the connection airports but **not** per-leg
+clock times — those live in a panel that only renders on click. That is why
+a Chrome result is a `BrowserOption` and not an `Itinerary`: nothing is
+invented to fill the gap. The connection airports are what matter, because
+they are what the visa rule needs, and an option whose routing could not be
+read fails closed rather than being treated as clean.
+
 **The wide net beats the grid at finding fares.** `tracker/monthly.py`
 sends one plain-text query per month ("Flights from SJO to NRT in February
 2027") and reads Google's own recommendation out of the prose:

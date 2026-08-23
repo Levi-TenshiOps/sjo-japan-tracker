@@ -28,3 +28,7 @@ preferences.json.bak
 parsefail_payload.html
 nlq_payload.html
 has32.html
+# Scratch Chrome dumps at the repo root only. tests/chrome_dom_32n.html
+# is the trimmed fixture the browser tests need and IS tracked.
+/chrome*.html
+/chrome*.err

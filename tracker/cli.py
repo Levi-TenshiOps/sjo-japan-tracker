@@ -6,13 +6,14 @@ import argparse
 import csv
 import logging
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from . import (
     alerts, config as config_mod, email_render, history, monthly, notify,
-    pricing, ranking, schedule, throttle,
+    pricing, ranking, schedule, throttle, verify as verify_mod,
 )
 from .itinerary import Itinerary, dedupe, format_price, partition
 from .preferences import Preferences, PreferencesError
@@ -299,6 +300,43 @@ def run(argv: list[str] | None = None) -> int:
     log.info("Cheapest: %s %s %s -> %s", format_price(best.price_usd),
              best.route_label, best.outbound_date, bands.classify(best.price_usd))
 
+    # Re-price the windows that matter through Chrome. The HTTP grid above
+    # cannot see the Zurich routings where the sub-threshold fares live: on
+    # 2027-01-29 it called $1,635 the cheapest while the real answer was
+    # $1,347 on Edelweiss/SWISS. Whatever Chrome finds is the truth for
+    # these windows, so it is logged loudly and drives the alert price.
+    verified: list = []
+    if cfg.chrome_verify:
+        targets = verify_mod.choose_targets(
+            hint_keys=monthly.hint_window_keys(month_hints),
+            hot_keys=hot,
+            grid_keys=[f"{i.outbound_date.isoformat()}_{i.return_date.isoformat()}"
+                       for i in accepted[:20] if i.return_date],
+            limit=cfg.chrome_max_per_run,
+            today=datetime.now(CR_TZ).date(),
+            min_lead_days=prefs.min_lead_days,
+        )
+        verified = verify_mod.verify(
+            targets,
+            origin=cfg.origins[0], destination=cfg.monthly_scan_destination,
+            max_stops=cfg.max_stops, chrome_override=cfg.chrome_path,
+            timeout_s=cfg.chrome_timeout_s, budget_ms=cfg.chrome_budget_ms,
+            sleep=time.sleep, delay_s=cfg.request_delay_seconds,
+        )
+        cheap = verify_mod.under(verified, cfg.good_price_usd)
+        if cheap:
+            log.info("CHROME FOUND %d fare(s) at or under %s:",
+                     len(cheap), format_price(cfg.good_price_usd))
+            for o in cheap[:5]:
+                log.info("   %s", o.describe())
+        elif verified:
+            log.info("Chrome: %d visa-free option(s), cheapest %s (none under %s)",
+                     len(verified), format_price(verified[0].price_usd),
+                     format_price(cfg.good_price_usd))
+        else:
+            log.info("Chrome: %d window(s) checked, no visa-free option found",
+                     len(targets))
+
     preview = ranking.select_top(
         accepted, count=prefs.result_count,
         is_priority=ranking.priority_checker(prefs.priority_months),
@@ -318,12 +356,22 @@ def run(argv: list[str] | None = None) -> int:
     # about the cheapest fare found. Never index qualifying[0] directly:
     # under daily_digest that list is empty on an expensive day.
     headline_pick = qualifying[0] if qualifying else best
+    # Chrome sees fares the grid cannot. When it found something cheaper,
+    # that is the day's real best price and the alert must be about it,
+    # otherwise the email reports $1,635 on a day a $1,347 seat existed.
+    alert_price = headline_pick.price_usd
+    alert_signature = headline_pick.signature
+    if verified and verified[0].price_usd < alert_price:
+        alert_price = verified[0].price_usd
+        alert_signature = f"chrome|{verified[0].deep_link[:80]}"
+        log.info("Alert price comes from Chrome: %s (grid said %s)",
+                 format_price(alert_price), format_price(headline_pick.price_usd))
     state = alerts.AlertState.load(cfg.state_file)
     now = datetime.now(CR_TZ)
     decision = alerts.decide(
         state,
-        best_price=headline_pick.price_usd,
-        best_signature=headline_pick.signature,
+        best_price=alert_price,
+        best_signature=alert_signature,
         good_threshold=cfg.good_price_usd,
         great_threshold=cfg.great_price_usd,
         now=now,
@@ -354,6 +402,7 @@ def run(argv: list[str] | None = None) -> int:
         priority_months=prefs.priority_months,
         priority_share=prefs.priority_share,
         priority_label=prefs.priority_label,
+        verified=verified,
     )
 
     if args.save_preview:
@@ -377,8 +426,8 @@ def run(argv: list[str] | None = None) -> int:
 
     if result.ok and not args.dry_run:
         alerts.record_sent(
-            state, best_price=headline_pick.price_usd,
-            best_signature=headline_pick.signature,
+            state, best_price=alert_price,
+            best_signature=alert_signature,
             is_great=decision.is_great, now=now)
     else:
         state.roll_day(now)

@@ -1,0 +1,164 @@
+"""Re-price the windows that matter through Chrome, because HTTP lies.
+
+The plain HTTP fetch does not merely miss long stays. On the trip owner's
+own target window — SJO to Tokyo, 2027-01-29 to 2027-02-25, 27 nights —
+it reported a cheapest of $1,635 (Lufthansa via Frankfurt) and $1,693
+(Avianca). The actual cheapest was **$1,347** on Edelweiss/SWISS via
+Zurich, confirmed on Google's booking page at 46 hr 20 min. That routing is
+absent from the server-rendered HTML at any stop limit, so no amount of
+grid coverage would ever have found it.
+
+That matters more than it sounds. The trip owner's alert threshold is
+$1,400, so the fares worth an email are exactly the ones HTTP cannot see.
+A tracker that reports $1,635 as "the cheapest" is not merely incomplete,
+it is wrong in the one direction that makes it useless.
+
+Chrome sees them. It costs about 25 seconds a window against 3 for HTTP,
+so it cannot price the whole grid — this module spends a small fixed
+budget on the windows most likely to be cheap:
+
+1. Windows the monthly wide net named, which are Google's own picks for
+   the cheapest dates in each month.
+2. The hot list — windows history already knows to be cheap.
+3. Whatever the HTTP grid thought was cheapest this run, since that is the
+   best guess available for anything the first two missed.
+
+Everything Chrome returns is visa-checked exactly like the HTTP path, and
+an option whose routing could not be read fails closed.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from datetime import date as Date
+from datetime import timedelta
+from typing import Callable, Iterable, Sequence
+
+from .browser import BrowserOption, chrome_path, fetch_dom, parse_options
+from .search import RouteQuery, build_query
+
+log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class VerifyTarget:
+    depart: Date
+    ret: Date
+    source: str                 # "hint" | "hot" | "grid" - for the log only
+
+    @property
+    def key(self) -> str:
+        return f"{self.depart.isoformat()}_{self.ret.isoformat()}"
+
+
+def _parse_key(key: str) -> tuple[Date, Date] | None:
+    try:
+        a, b = key.split("_")
+        return Date.fromisoformat(a), Date.fromisoformat(b)
+    except (ValueError, AttributeError):
+        return None
+
+
+def choose_targets(
+    *,
+    hint_keys: Sequence[str] = (),
+    hot_keys: Sequence[str] = (),
+    grid_keys: Sequence[str] = (),
+    limit: int = 10,
+    today: Date | None = None,
+    min_lead_days: int = 0,
+) -> list[VerifyTarget]:
+    """The windows worth spending a Chrome launch on, best first.
+
+    Ordering is the point: wide-net hints are Google's own cheapest-date
+    picks and earn the first launches, then windows history knows are
+    cheap, then the grid's best guess. Duplicates collapse to their
+    highest-priority source, and a window already in the past is dropped.
+    """
+    today = today or Date.today()
+    floor = today + timedelta(days=min_lead_days)
+
+    out: list[VerifyTarget] = []
+    seen: set[str] = set()
+    for source, keys in (("hint", hint_keys), ("hot", hot_keys), ("grid", grid_keys)):
+        for key in keys:
+            if key in seen or len(out) >= limit:
+                continue
+            pair = _parse_key(key)
+            if pair is None:
+                continue
+            depart, ret = pair
+            if depart < floor or ret <= depart:
+                continue
+            seen.add(key)
+            out.append(VerifyTarget(depart, ret, source))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def verify(
+    targets: Iterable[VerifyTarget],
+    *,
+    origin: str = "SJO",
+    destination: str = "NRT",
+    max_stops: int | None = 2,
+    chrome: str | None = None,
+    chrome_override: str = "",
+    timeout_s: int = 120,
+    budget_ms: int = 30000,
+    fetch: Callable[..., str] | None = None,
+    sleep: Callable[[float], None] | None = None,
+    delay_s: float = 2.0,
+) -> list[BrowserOption]:
+    """Price each target through Chrome. Visa-rejected options are dropped.
+
+    `fetch` is injectable so tests never launch a browser. Returns every
+    surviving option across all targets, cheapest first.
+    """
+    exe = chrome or chrome_path(chrome_override)
+    if exe is None and fetch is None:
+        log.info("Chrome not found; skipping verification "
+                 "(set chrome_path in config.yaml if it is installed elsewhere)")
+        return []
+
+    grab = fetch or (lambda url: fetch_dom(url, chrome=exe, timeout=timeout_s,
+                                           virtual_time_budget_ms=budget_ms))
+    found: list[BrowserOption] = []
+    for n, t in enumerate(targets):
+        query = build_query(RouteQuery(origin=origin, destination=destination,
+                                       outbound=t.depart, inbound=t.ret,
+                                       max_stops=max_stops, hub=None))
+        url = query.url()
+        dom = grab(url)
+        options = parse_options(dom, origin=origin, destination=destination,
+                                depart_date=t.depart, return_date=t.ret,
+                                deep_link=url)
+        usable = [o for o in options if o.visa_ok]
+        rejected = len(options) - len(usable)
+        if options:
+            log.info("Chrome %s %s -> %s +%dn: %d option(s), %d visa-rejected, "
+                     "cheapest usable %s",
+                     t.source, t.depart, t.ret, (t.ret - t.depart).days,
+                     len(options), rejected,
+                     f"${min(o.price_usd for o in usable):,}" if usable else "none")
+        else:
+            log.info("Chrome %s %s +%dn: nothing returned",
+                     t.source, t.depart, (t.ret - t.depart).days)
+        found.extend(usable)
+        if sleep and delay_s:
+            sleep(delay_s)
+
+    found.sort(key=lambda o: o.price_usd)
+    return found
+
+
+def cheapest(options: Sequence[BrowserOption]) -> BrowserOption | None:
+    return min(options, key=lambda o: o.price_usd) if options else None
+
+
+def under(options: Sequence[BrowserOption], threshold: int) -> list[BrowserOption]:
+    """Options at or under the alert threshold, cheapest first."""
+    return sorted((o for o in options if o.price_usd <= threshold),
+                  key=lambda o: o.price_usd)
