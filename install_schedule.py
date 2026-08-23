@@ -210,27 +210,64 @@ def install_cron(hours: list[int], root: Path, dry: bool) -> int:
 
 
 def print_windows(hours: list[int], root: Path) -> int:
-    print("Run each of these in an elevated PowerShell:\n")
-    for n, h in enumerate(hours, 1):
-        print(
-            f'schtasks /Create /TN "FlightTracker{n}" /SC DAILY '
-            f'/ST {h:02d}:{(h * 7) % 60:02d} '
-            f'/TR "cmd /c cd /d {root} && {python_exe()} -m tracker.cli '
-            f'--runs-per-day {len(hours)} >> tracker.log 2>&1"'
-        )
-    print("\nThen, for each task, open Task Scheduler and tick")
-    print('"Run task as soon as possible after a scheduled start is missed".')
+    """Print PowerShell that registers the jobs. Deliberately not schtasks.
 
-    # The sweep is a *service*, not a scheduled job: it runs continuously
-    # and resumes itself, so it wants ONLOGON rather than a daily trigger.
-    # It is what closes the coverage gap the scheduled runs cannot - they
-    # price ~120 windows a day against a space of ~4,000.
-    print("\nAnd, to keep the full-coverage sweep running (recommended):\n")
-    print(
-        f'schtasks /Create /TN "FlightTrackerSweep" /SC ONLOGON '
-        f'/TR "cmd /c cd /d {root} && {python_exe()} sweep_forever.py '
-        f'--batch 25 --delay 6 >> sweep.log 2>&1"'
-    )
+    This project lives at "D:\\Levi\\Japan flight scanner\\..." and schtasks
+    mangles a /TR value containing spaces - it reads the path as separate
+    arguments and dies with "Invalid argument/option - 'flight'". Escaping
+    it well enough to survive both cmd.exe and the task scheduler is
+    possible and unreadable.
+
+    Register-ScheduledTask takes the executable and its arguments as
+    separate parameters, so quoting stops being the caller's problem. It
+    also registers daily jobs without administrator rights.
+    """
+    py = python_exe()
+    n_runs = len(hours)
+    hour_list = ", ".join(str(h) for h in hours)
+
+    print("Paste this into PowerShell. No administrator rights needed.\n")
+    print(f'$root = "{root}"')
+    print(f'$py   = "{py}"')
+    print(f"$hours = @({hour_list})")
+    print("for ($i = 0; $i -lt $hours.Count; $i++) {")
+    print("  $h = $hours[$i]; $m = ($h * 7) % 60; $n = $i + 1")
+    print("  $a = New-ScheduledTaskAction -Execute $py "
+          f"-Argument \"-m tracker.cli --runs-per-day {n_runs}\" "
+          "-WorkingDirectory $root")
+    print("  $t = New-ScheduledTaskTrigger -Daily "
+          "-At ([datetime]::Today.AddHours($h).AddMinutes($m))")
+    # -StartWhenAvailable is the Task Scheduler checkbox for "run as soon as
+    # possible after a missed start", which is what matters on a laptop that
+    # was asleep at 06:00.
+    print("  $s = New-ScheduledTaskSettingsSet -StartWhenAvailable "
+          "-AllowStartIfOnBatteries -DontStopIfGoingOnBatteries "
+          "-ExecutionTimeLimit (New-TimeSpan -Hours 1)")
+    print('  Register-ScheduledTask -TaskName "FlightTracker$n" -Action $a '
+          "-Trigger $t -Settings $s -Force | Out-Null")
+    print("}")
+    print(f'"registered {n_runs} daily runs"')
+
+    # The sweep is a service, not a scheduled job: it runs continuously and
+    # resumes itself. An AtLogOn trigger would need admin rights; a file in
+    # the Startup folder does not, and achieves the same thing.
+    print("\n\nThen, so the full-coverage sweep survives a reboot:\n")
+    print('$startup = [Environment]::GetFolderPath("Startup")')
+    print(f'$root = "{root}"')
+    print(f'$py   = "{py}"')
+    print("$lines = @(")
+    print('  "@echo off",')
+    print('  "cd /d \\"$root\\"",')
+    print('  "start \\"\\" /min \\"$py\\" -u sweep_forever.py '
+          '--batch 25 --delay 6 >> \\"$root\\sweep.log\\" 2>&1"')
+    print(")")
+    print('Set-Content -Path (Join-Path $startup "FlightTrackerSweep.cmd") '
+          "-Value $lines -Encoding ASCII")
+    print('"sweep will start at every logon"')
+
+    print("\n\nTo start the sweep now rather than waiting for a logon:")
+    print(f'  cd "{root}"')
+    print(f'  "{py}" sweep_forever.py --batch 25 --delay 6')
     print("\nCheck on it any time with:  python sweep_forever.py --status")
     return 0
 
