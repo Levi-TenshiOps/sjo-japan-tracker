@@ -243,3 +243,91 @@ class TestMonthHalves:
         f = FakeFetch({"March": WITH_YEAR})
         hints = scan_months(f, [("March 2027", 2027)], halves=True)
         assert len(hints) == 1
+
+
+from datetime import date as Date          # noqa: E402
+from tracker import monthly                # noqa: E402
+
+
+class TestTheMonthLedger:
+    """The wide net's answers must outlive the run that fetched them.
+
+    Found 2026-08-23. The sweep walks the priority months first, so 37% into
+    its first pass it had priced January, February and March and nothing
+    else - five of eight months had no price data at all. Meanwhile the wide
+    net had been asking about every month, six times a day, logging the
+    answers and discarding them. Keeping them costs nothing.
+    """
+
+    def hint(self, month="February 2027", price=1347,
+             dep=Date(2027, 1, 29), ret=Date(2027, 2, 25)):
+        return MonthHint(month=month, depart=dep, ret=ret, price_usd=price)
+
+    def test_a_missing_ledger_is_empty_not_an_error(self, tmp_path):
+        led = monthly.load_ledger(tmp_path / "nope.json")
+        assert led["months"] == {}
+
+    def test_a_corrupt_ledger_is_discarded_not_raised(self, tmp_path):
+        p = tmp_path / "led.json"
+        p.write_text("{ not json", encoding="utf-8")
+        assert monthly.load_ledger(p)["months"] == {}
+
+    def test_a_hint_is_recorded(self, tmp_path):
+        p = tmp_path / "led.json"
+        monthly.record_hints(p, [self.hint()], asked=["February 2027"])
+        row = monthly.load_ledger(p)["months"]["February 2027"]
+        assert row["best_usd"] == 1347 and row["hits"] == 1 and row["asks"] == 1
+
+    def test_the_best_price_survives_a_dearer_later_run(self, tmp_path):
+        """The latest price alone cannot answer 'was this month ever cheap?'"""
+        p = tmp_path / "led.json"
+        monthly.record_hints(p, [self.hint(price=1347)], asked=["February 2027"])
+        monthly.record_hints(p, [self.hint(price=2100)], asked=["February 2027"])
+        row = monthly.load_ledger(p)["months"]["February 2027"]
+        assert row["best_usd"] == 1347, "the cheapest ever must be kept"
+        assert row["last_usd"] == 2100, "and the latest, separately"
+        assert row["hits"] == 2 and row["asks"] == 2
+
+    def test_a_cheaper_run_replaces_the_best_and_its_dates(self, tmp_path):
+        p = tmp_path / "led.json"
+        monthly.record_hints(p, [self.hint(price=2100)], asked=["February 2027"])
+        monthly.record_hints(
+            p, [self.hint(price=1347, dep=Date(2027, 2, 3), ret=Date(2027, 3, 2))],
+            asked=["February 2027"])
+        row = monthly.load_ledger(p)["months"]["February 2027"]
+        assert row["best_usd"] == 1347
+        assert row["best_depart"] == "2027-02-03"
+        assert row["best_ret"] == "2027-03-02"
+
+    def test_a_month_that_answered_nothing_is_still_recorded(self, tmp_path):
+        """'Never asked' and 'asked, never answered' are different facts."""
+        p = tmp_path / "led.json"
+        monthly.record_hints(p, [], asked=["November 2026", "December 2026"])
+        months = monthly.load_ledger(p)["months"]
+        assert set(months) == {"November 2026", "December 2026"}
+        assert months["November 2026"]["best_usd"] is None
+        assert months["November 2026"]["asks"] == 1
+        assert months["November 2026"]["hits"] == 0
+
+    def test_asks_accumulate_while_hits_do_not(self, tmp_path):
+        p = tmp_path / "led.json"
+        for _ in range(4):
+            monthly.record_hints(p, [], asked=["November 2026"])
+        row = monthly.load_ledger(p)["months"]["November 2026"]
+        assert row["asks"] == 4 and row["hits"] == 0
+
+    def test_format_puts_the_cheapest_month_first(self, tmp_path):
+        p = tmp_path / "led.json"
+        monthly.record_hints(p, [
+            self.hint(month="January 2027", price=1900),
+            self.hint(month="February 2027", price=1347,
+                      dep=Date(2027, 2, 3), ret=Date(2027, 3, 2)),
+        ], asked=["January 2027", "February 2027", "March 2027"])
+        lines = monthly.format_ledger(monthly.load_ledger(p), threshold=1400)
+        assert "February 2027" in lines[0] and "under threshold" in lines[0]
+        assert "January 2027" in lines[1]
+        assert "March 2027" in lines[2] and "no hint yet" in lines[2]
+
+    def test_an_empty_ledger_says_so(self):
+        assert monthly.format_ledger({"months": {}}) == [
+            "No month hints recorded yet."]

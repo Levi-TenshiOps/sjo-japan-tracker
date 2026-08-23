@@ -121,6 +121,12 @@ class Config:
     # can interleave a line; separate files cost nothing and the baseline
     # simply reads both.
     sweep_history_csv: str = "sweep_history.csv"
+    # What the wide net said, month by month, kept across runs. The sweep
+    # walks the priority months first, so five of the eight months had no
+    # price data at all while the first pass was still running - yet the
+    # wide net had been asking about every one of them six times a day and
+    # discarding the answers.
+    month_ledger: str = "month_hints.json"
     # One process queries Google at a time. The sweep runs continuously and
     # the scheduled tracker six times a day, so without this they overlap
     # roughly every four hours - and the symptom is silence, not an error.

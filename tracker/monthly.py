@@ -36,9 +36,14 @@ Two known limits, both measured:
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import tempfile
 from dataclasses import dataclass
 from datetime import date as Date
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
 MONTH_NUM = {m: i for i, m in enumerate(
@@ -209,3 +214,131 @@ def scan_months(
 def hint_window_keys(hints: Iterable[MonthHint]) -> list[str]:
     """Hot-list keys for the windows the hints named, cheapest first."""
     return [h.key for h in sorted(hints, key=lambda h: h.price_usd)]
+
+
+# --------------------------------------------------------------------------
+# The ledger: remember what the wide net said, month by month.
+#
+# Added 2026-08-23, after an audit asked a question the project could not
+# answer: which months are cheap? The sweep had priced 1,604 windows but
+# `discoveries.json` remembered only January, February and March - because
+# `sweep_order` walks the priority months first and the sweep was 37% into
+# its first pass. Five of the eight months had never been priced at all.
+#
+# That also makes the note in CLAUDE.md - "every cheap window sat in January
+# or February" - circular: those were the only months looked at.
+#
+# The wide net already asks about *every* month, six times a day, for eight
+# requests a run. It logged the answers and threw them away. Keeping them
+# costs nothing and gives an 8-month price picture immediately rather than
+# after the sweep's first full pass.
+#
+# A month that returns no hint is recorded too. "No hint" is normal - three
+# months in eight, measured - and a month that has *never* answered is worth
+# telling apart from one that answered expensively.
+
+LEDGER_VERSION = 1
+DEFAULT_LEDGER = "month_hints.json"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def load_ledger(path: str | Path = DEFAULT_LEDGER) -> dict:
+    """Never raises. A missing or damaged ledger is simply an empty one."""
+    p = Path(path)
+    if not p.exists():
+        return {"version": LEDGER_VERSION, "months": {}}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {"version": LEDGER_VERSION, "months": {}}
+    if not isinstance(data, dict) or data.get("version") != LEDGER_VERSION:
+        return {"version": LEDGER_VERSION, "months": {}}
+    if not isinstance(data.get("months"), dict):
+        data["months"] = {}
+    return data
+
+
+def save_ledger(ledger: dict, path: str | Path = DEFAULT_LEDGER) -> None:
+    """Atomic write - a scheduled run may read this while another writes."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(ledger, fh, indent=2)
+        os.replace(tmp, p)
+    except Exception:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def record_hints(path: str | Path, hints: Iterable[MonthHint], *,
+                 asked: Iterable[str] = (), now: str | None = None) -> dict:
+    """Fold this run's hints into the ledger and return it.
+
+    `asked` is every month label the run queried, so months that answered
+    nothing are counted rather than being invisible. The best-ever price is
+    kept alongside the latest, because the latest alone cannot answer "has
+    this month ever been cheap?" - which is the question the ledger exists
+    for.
+    """
+    stamp = now or _now_iso()
+    ledger = load_ledger(path)
+    months = ledger["months"]
+
+    for label in asked:
+        months.setdefault(label, {
+            "best_usd": None, "best_depart": "", "best_ret": "", "best_seen": "",
+            "last_usd": None, "last_depart": "", "last_ret": "", "last_seen": "",
+            "hits": 0, "asks": 0,
+        })
+        months[label]["asks"] = int(months[label].get("asks", 0)) + 1
+
+    for h in hints:
+        row = months.setdefault(h.month, {
+            "best_usd": None, "best_depart": "", "best_ret": "", "best_seen": "",
+            "last_usd": None, "last_depart": "", "last_ret": "", "last_seen": "",
+            "hits": 0, "asks": 1,
+        })
+        row["hits"] = int(row.get("hits", 0)) + 1
+        row["last_usd"] = h.price_usd
+        row["last_depart"] = h.depart.isoformat()
+        row["last_ret"] = h.ret.isoformat()
+        row["last_seen"] = stamp
+        best = row.get("best_usd")
+        if best is None or h.price_usd < int(best):
+            row["best_usd"] = h.price_usd
+            row["best_depart"] = h.depart.isoformat()
+            row["best_ret"] = h.ret.isoformat()
+            row["best_seen"] = stamp
+
+    save_ledger(ledger, path)
+    return ledger
+
+
+def format_ledger(ledger: dict, *, threshold: int | None = None) -> list[str]:
+    """Human-readable lines, cheapest month first, for --status."""
+    months = ledger.get("months", {})
+    if not months:
+        return ["No month hints recorded yet."]
+
+    def sort_key(item):
+        best = item[1].get("best_usd")
+        return (best is None, best if best is not None else 0)
+
+    lines = []
+    for label, row in sorted(months.items(), key=sort_key):
+        asks, hits = int(row.get("asks", 0)), int(row.get("hits", 0))
+        best = row.get("best_usd")
+        if best is None:
+            lines.append(f"  {label:<16} no hint yet ({hits}/{asks} answered)")
+            continue
+        flag = "  <-- under threshold" if threshold and int(best) <= threshold else ""
+        lines.append(
+            f"  {label:<16} best ${int(best):,} "
+            f"{row.get('best_depart','')} -> {row.get('best_ret','')} "
+            f"({hits}/{asks} answered){flag}")
+    return lines

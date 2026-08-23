@@ -23,12 +23,28 @@ CR_TZ = ZoneInfo("America/Costa_Rica")
 log = logging.getLogger("tracker")
 
 
-def _setup_logging(verbose: bool) -> None:
+def _setup_logging(verbose: bool, log_file: str = "") -> None:
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(message)s",
         datefmt="%H:%M:%S",
     )
+    # The scheduled task runs headless, so without this the only record of a
+    # run is its exit code. Checked 2026-08-23: six tasks installed, one had
+    # fired, and there was no way to see what it did or whether the email it
+    # should have sent was actually sent. Append with the date, so one file
+    # is the whole history rather than the last run only.
+    if not log_file:
+        return
+    try:
+        handler = logging.FileHandler(log_file, encoding="utf-8")
+    except OSError as exc:
+        log.warning("could not open %s for logging: %s", log_file, exc)
+        return
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)-7s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"))
+    logging.getLogger().addHandler(handler)
 
 
 def _read_rows(path: str) -> list[dict]:
@@ -153,10 +169,13 @@ def run(argv: list[str] | None = None) -> int:
     parser.add_argument("--status", action="store_true",
                         help="print settings and coverage, then exit")
     parser.add_argument("--no-history", action="store_true")
+    parser.add_argument("--log", default="tracker.log",
+                        help="append the run log here as well as the terminal "
+                             "(default tracker.log; empty string disables)")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
 
-    _setup_logging(args.verbose)
+    _setup_logging(args.verbose, "" if args.status else args.log)
 
     try:
         prefs = Preferences.load(args.preferences)
@@ -220,9 +239,18 @@ def run(argv: list[str] | None = None) -> int:
                 max_nights=max(nights) if nights else None,
                 halves=cfg.monthly_scan_halves,
             )
-        asked = len(monthly.months_in_window(early, late))
+        months_asked = monthly.months_in_window(early, late)
+        asked = len(months_asked)
         for h in month_hints:
             log.info("Month hint  %s", h.describe())
+        # Keep them. The hints are the only price data this project has for
+        # the months the sweep has not reached yet, and until now every run
+        # logged them and threw them away.
+        try:
+            monthly.record_hints(cfg.month_ledger, month_hints,
+                                 asked=[label for label, _year in months_asked])
+        except OSError as exc:
+            log.debug("could not record month hints: %s", exc)
         if month_hints:
             keys = monthly.hint_window_keys(month_hints)
             hot = keys + [k for k in hot if k not in set(keys)]
@@ -274,6 +302,15 @@ def run(argv: list[str] | None = None) -> int:
               f"everything else every {gen_days:.1f} day(s)")
         print(f"  Throttle     : {throttle_state.advice(args.runs_per_day)}")
         print(f"  Hot list     : {len(hot)} window(s) re-priced every run")
+        # The only 8-month-wide price picture the project has. The sweep
+        # walks the priority months first, so on 2026-08-23 it had priced
+        # January to March and nothing else - while the wide net had been
+        # asking about every month, six times a day, since the start.
+        ledger = monthly.load_ledger(cfg.month_ledger)
+        print("\nWide net, cheapest seen per month:")
+        for line in monthly.format_ledger(ledger,
+                                          threshold=prefs.good_price_usd):
+            print(line)
         return 0
 
     log.info("Alert under %s, standout under %s",

@@ -85,10 +85,38 @@ Measured 2026-08-23 across 400 priced windows:
     at or under $1,600                          15 windows   4%
     at or under $2,000                         186 windows  46%
 
-and every one of the fifteen sat in January or February. Sweeping all 4,014
-windows at equal priority therefore spent about 96% of its requests on
-dates that cannot produce an alert - roughly 5,800 requests a day to one
-address, which is what got it throttled.
+**Read that sample carefully - re-audited 2026-08-23 and it is not what it
+looks like.** Two biases, both mine:
+
+* Those 400 are not a sample of the search space. `MAX_ENTRIES = 400` and
+  `SweepStore.prune` keeps the *cheapest* 400 of everything seen, so the
+  distribution is the cheap tail of 1,604 priced windows, not 400 typical
+  ones. Against all 1,604, the sub-$1,400 share is 0.3%, not 1%.
+* An earlier version of this note added "and every one of the fifteen sat
+  in January or February", and used it to argue the other months are dear.
+  That is circular. `sweep_order` walks the priority months first, and at
+  cursor 1486 of 4014 the sweep had priced January, February and March and
+  **nothing else** - September to December 2026 and April 2027 had never
+  been priced at all. Every window looked at was in January to March, so of
+  course every cheap one was too.
+
+This is the same mistake as the max-stay rule, in a new costume: concluding
+something about dates that were never queried. The honest statement is that
+January and February are the cheapest months *among the three looked at*.
+
+The tiering itself is unaffected, because the hot list is chosen per window
+by observed price (within 1.3x of the best, or under the threshold) and
+never by month. It is only the justification that was overstated.
+
+What actually closes the gap is `monthly.record_hints`: the wide net asks
+about all eight months, six times a day, and until 2026-08-23 it logged the
+answers and threw them away. They are now kept in `month_hints.json` and
+printed by `cli.py --status`, so the 8-month picture arrives in hours
+instead of waiting ~3.5 days for the sweep's cold half.
+
+Sweeping all 4,014 windows at equal priority still spent about 96% of its
+requests on dates that were not producing alerts - roughly 5,800 requests a
+day to one address, which is what got it throttled.
 
 One launch in four now goes to a window already known to be cheap (within
 1.3x of the best fare seen, or under the alert threshold); the rest
@@ -422,11 +450,19 @@ Done and no longer open: `extract_google_bands` now returns GOOGLE-sourced
 bands on live payloads (`tests/payload_ds1.html` is the trimmed fixture);
 the metro-code, max-stops, max-stay and OSA questions are all settled above.
 
-1. **Throttling over a full week.** One run at 26 requests came back with a
-   36-38% empty rate *before* the 35-night lengths were dropped. Confirm the
-   rate falls now that a quarter of the grid is no longer structurally
-   empty, and that `throttle.json` settles somewhere sensible rather than
-   collapsing to the floor of 8 or pinning at the ceiling of 40.
+1. **Throttling over a full week.** ~~Confirm `throttle.json` settles
+   somewhere sensible rather than collapsing to the floor of 8.~~ Answered
+   2026-08-23, and the answer is the bad one: **it collapsed to the floor.**
+   `budget: 8`, `consecutive_bad: 4`, with per-run empty rates walking
+   0.25 -> 0.46 -> 0.61 -> 0.75 across the day.
+
+   At 8 requests a run the grid needs ~300 days for a full pass, so it now
+   contributes nothing to coverage. That does not by itself argue for
+   removing it - the section above already concluded the grid earns its keep
+   only as the fallback that produces an email when the sweep is down, and a
+   floored budget still does that. But the floor should be read as the
+   adaptive throttle working, not as a setting to raise. Do not raise it
+   while the sweep is also running; they share one IP.
 2. **Email rendering in a real client.** Send one to yourself and check
    Gmail mobile, Gmail dark mode and Outlook. Layout is table-based and
    inline-styled for exactly this. Pay attention to the greeting: the kanji
@@ -450,16 +486,21 @@ the metro-code, max-stops, max-stay and OSA questions are all settled above.
 - [x] `python setup_tracker.py`, then `--status`, then `--dry-run`
 - [x] Fix `extract_google_bands` against a captured payload
 - [ ] One real run; inspect the email in a real client
-- [ ] `python install_schedule.py`; confirm it fires
+- [x] `python install_schedule.py`; confirm it fires. Six tasks
+      (FlightTracker1-6) are installed and Ready; FlightTracker2 fired at
+      09:03 on 2026-08-23 with exit code 0. The others showed result
+      `267011` = `SCHED_S_TASK_HAS_NOT_RUN`, which is "not yet", not a
+      failure - they were installed after their slot had passed.
+- [ ] Confirm a scheduled run's *contents*, now that `tracker.log` exists.
+      Until 2026-08-23 `tracker.cli` wrote no log file at all, so a run's
+      only trace was its exit code and there was no way to tell a run that
+      emailed from one that silently found nothing.
 - [ ] Watch a week; check `throttle.json` settled somewhere sensible
-- [ ] Decide the alert thresholds. `preferences.json` currently says
-      $2,600 / $2,200 while `CLAUDE.md` has long said to aim at
-      $1,250 / $1,100 and the sample email was built at $1,380. Live
-      SJO-TYO fares are landing around $1,400-$2,200, so $2,600 is loose
-      enough that almost everything "qualifies". Under `daily_digest` this
-      no longer decides whether mail arrives, only how it is framed and
-      which rows are highlighted — but it should still be a number that
-      means something.
+- [x] Decide the alert thresholds. Done: `preferences.json` now holds
+      `good_price_usd: 1400`, `great_price_usd: 1150`, which matches the
+      market (the cheapest fare found anywhere so far is $1,347) and makes
+      the highlight mean something. This file previously said $2,600/$2,200
+      was still live; that was stale.
 - [ ] Add `plan_open_jaw()` once real dates are set (Tokyo in, Seoul out)
 
 ## Deployment
