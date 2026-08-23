@@ -330,7 +330,8 @@ def run(argv: list[str] | None = None) -> int:
     # sweep is not running, which must never break the email.
     try:
         store = sweeper.SweepStore.load(cfg.sweep_store)
-        swept = [d.to_option() for d in store.best(limit=12)]
+        swept = [d.to_option() for d in
+                 store.best(limit=12, max_age_hours=cfg.sweep_max_age_hours)]
     except Exception as exc:                # noqa: BLE001
         log.debug("sweep store unreadable (%s); continuing without it", exc)
         swept = []

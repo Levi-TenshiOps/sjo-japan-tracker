@@ -116,6 +116,12 @@ class Config:
     # Written by sweep_forever.py, read here. Missing is fine - it just
     # means the background sweep is not running.
     sweep_store: str = "discoveries.json"
+    # How stale a swept price may be before the email stops showing it. The
+    # store keeps findings for longer so the sweep can tell what it has
+    # already seen, but a price is a snapshot: presenting a day-old number
+    # beside a just-checked one, with no way to tell them apart, would make
+    # the email lie by omission.
+    sweep_max_age_hours: float = 10.0
     dashboard_url: str = ""
 
     # -- validation -------------------------------------------------------
