@@ -70,6 +70,10 @@ class Config:
     # the text query takes a place name, not a metro code list.
     monthly_scan: bool = True
     monthly_scan_destination: str = "NRT"   # text query wants one airport
+    # Also ask about each half-month. Google answers one recommendation per
+    # query, so a narrower range can name a window the month query never
+    # mentions. Costs two extra HTTP requests per month.
+    monthly_scan_halves: bool = True
 
     # Chrome verification. Plain HTTP does not just miss long stays: on
     # 2027-01-29 -> 2027-02-25 it reported a cheapest of $1,635 while the

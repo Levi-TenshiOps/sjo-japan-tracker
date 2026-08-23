@@ -11,8 +11,8 @@ from datetime import date
 import pytest
 
 from tracker.monthly import (
-    MonthHint, hint_window_keys, months_in_window, parse_hint, scan_months,
-    visible_text,
+    MonthHint, hint_window_keys, month_halves, months_in_window, parse_hint,
+    scan_months, visible_text,
 )
 
 # Real page text, trimmed. Note the en dash and the missing year.
@@ -196,3 +196,50 @@ class TestTextQueryForcesCurrency:
 
         monkeypatch.setattr(search, "Client", Boom)
         assert search.fetch_text_query("anything") == ""
+
+
+class TestMonthHalves:
+    """Narrower ranges surface windows the whole-month query misses.
+
+    Measured 2026-08-22: "January 16 to January 31 2027" named a $1,387
+    window that "in January 2027" never mentioned. Additive, not a
+    replacement - five of eight narrow queries returned nothing at all.
+    """
+
+    def test_two_probes_per_month(self):
+        got = month_halves([("January 2027", 2027)])
+        assert len(got) == 2
+
+    def test_fragments_read_as_google_expects(self):
+        got = month_halves([("January 2027", 2027)])
+        assert got[0][0] == "January 1 to January 15 2027"
+        assert got[1][0] == "January 16 to January 31 2027"
+
+    def test_short_months_end_correctly(self):
+        assert month_halves([("February 2027", 2027)])[1][0].endswith("February 28 2027")
+        assert month_halves([("April 2027", 2027)])[1][0].endswith("April 30 2027")
+
+    def test_leap_february_gets_29_days(self):
+        assert month_halves([("February 2028", 2028)])[1][0].endswith("February 29 2028")
+
+    def test_labels_distinguish_the_halves(self):
+        got = month_halves([("March 2027", 2027)])
+        assert "1st half" in got[0][1] and "2nd half" in got[1][1]
+
+    def test_scan_without_halves_asks_once_per_month(self):
+        f = FakeFetch({})
+        scan_months(f, [("March 2027", 2027)], halves=False)
+        assert len(f.queries) == 1
+
+    def test_scan_with_halves_asks_three_times(self):
+        f = FakeFetch({})
+        scan_months(f, [("March 2027", 2027)], halves=True)
+        assert len(f.queries) == 3
+        assert "in March 2027" in f.queries[0]
+        assert "March 1 to March 15 2027" in f.queries[1]
+
+    def test_a_window_repeated_across_probes_is_reported_once(self):
+        """Halves usually echo the month's own answer; do not double-count."""
+        f = FakeFetch({"March": WITH_YEAR})
+        hints = scan_months(f, [("March 2027", 2027)], halves=True)
+        assert len(hints) == 1

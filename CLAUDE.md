@@ -58,7 +58,12 @@ tracker/search.py        fast-flights wrapper, deep links
 tracker/email_render.py  HTML + text email
 tracker/history.py       CSV log and baseline
 tracker/notify.py        SMTP and ntfy
+tracker/browser.py       Chrome headless fetch + DOM parse  <- sees what HTTP hides
+tracker/verify.py        re-price the windows that matter, via Chrome
+tracker/monthly.py       the wide net: Google's own cheapest-date hints
+tracker/sweeper.py       endless full-coverage sweep, resumable
 tracker/cli.py           orchestration
+sweep_forever.py         run the sweep as a separate long-lived process
 setup_tracker.py         one-time wizard
 install_schedule.py      launchd / systemd / cron installer
 ```
@@ -181,12 +186,37 @@ visa-filtered so the comparison is fair:
 An earlier version of this audit compared *unfiltered* HTTP against
 filtered Chrome and made HTTP look better than it is. Filter both sides.
 
-**Zurich is where the cheap fares are.** Across every visa-free option
-collected, ZRH was the only hub appearing in fares at or under $1,600 (2 of
-2 appearances). MEX, PVR, PTY, IST, MAD, DOH and MTY appeared 15 times
-between them and never once cheap. Forcing `connecting_airports=[ZRH]` does
-*not* help though — it returns the same fare when one exists and nothing
-when it does not, so a general query is strictly better.
+**The cheap fares are Lufthansa Group through Europe.** An earlier note
+here claimed "Zurich is where the cheap fares are, and it is basically
+alone". That was generalised from two ZRH sightings and is wrong. Priced
+across 16 windows spanning all eight months, tallying every visa-free
+routing by connecting hub:
+
+    hub   seen      min   median   <=$1,600
+    FRA     14    1,558    2,340          2
+    MUC      2    1,558    1,694          1
+    CDG      5    1,954    2,193          0
+    AMS      4    1,964    1,985          0
+    MAD      6    2,128    2,790          0
+    MEX     17    2,303    2,993          0
+    MTY      9    2,303    2,880          0
+    PVR      8    2,758    3,105          0
+    ICN      1    6,108    6,108          0
+
+Zurich did not appear at all in that sample, yet ZRH carries the cheapest
+fare found anywhere so far ($1,347). Both facts are true: the cheap
+European routings are Lufthansa Group - Frankfurt, Munich and Zurich, with
+SWISS and Edelweiss inside that group - and which of the three shows up
+depends on the dates. Amsterdam and Paris are a clear second tier. Every
+Latin American hub (MEX, MTY, PVR, PTY, SAL) was expensive in every window
+priced, without exception.
+
+The practical consequence is *not* to filter to a favourite hub. Forcing
+`connecting_airports=[ZRH]` was measured and returns the same fare when one
+exists and nothing when it does not, so a general query strictly dominates.
+The lesson is about where to look when a result seems too expensive: if no
+European Lufthansa-group routing appears, the search probably did not see
+everything.
 
 **The wide net cannot see Haneda.** "Flights from SJO to HND in <month>"
 returns no recommendation at all, and every rephrasing tried ("to Tokyo",

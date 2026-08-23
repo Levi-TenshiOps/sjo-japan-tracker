@@ -199,6 +199,7 @@ def run(argv: list[str] | None = None) -> int:
             origin=cfg.origins[0],
             min_nights=min(nights) if nights else None,
             max_nights=max(nights) if nights else None,
+            halves=cfg.monthly_scan_halves,
         )
         asked = len(monthly.months_in_window(early, late))
         for h in month_hints:

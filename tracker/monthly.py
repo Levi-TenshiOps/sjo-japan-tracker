@@ -45,6 +45,10 @@ MONTH_NUM = {m: i for i, m in enumerate(
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
 
+_LAST_DAY = {"January": 31, "February": 28, "March": 31, "April": 30,
+             "May": 31, "June": 30, "July": 31, "August": 31,
+             "September": 30, "October": 31, "November": 30, "December": 31}
+
 MONTH_FULL = {i: m for i, m in enumerate(
     ["January", "February", "March", "April", "May", "June", "July",
      "August", "September", "October", "November", "December"], 1)}
@@ -136,6 +140,27 @@ def months_in_window(earliest: Date, latest: Date) -> list[tuple[str, int]]:
     return out
 
 
+def month_halves(months: Sequence[tuple[str, int]]) -> list[tuple[str, str, int]]:
+    """(query fragment, label, anchor year) for each half of each month.
+
+    Google answers one recommendation per query, so a narrower range can
+    surface a window the whole-month query never mentions - measured
+    2026-08-22, "January 16 to January 31 2027" named a $1,387 window that
+    "in January 2027" did not. It is additive, not a replacement: five of
+    eight narrow queries that day returned no hint at all.
+    """
+    out: list[tuple[str, str, int]] = []
+    for label, year in months:
+        name, _, yr = label.rpartition(" ")
+        yr = int(yr) if yr.isdigit() else year
+        last = _LAST_DAY.get(name, 30)
+        if name == "February" and yr % 4 == 0 and (yr % 100 != 0 or yr % 400 == 0):
+            last = 29
+        out.append((f"{name} 1 to {name} 15 {yr}", f"{label} (1st half)", yr))
+        out.append((f"{name} 16 to {name} {last} {yr}", f"{label} (2nd half)", yr))
+    return out
+
+
 def scan_months(
     fetch: Callable[[str], str],
     months: Sequence[tuple[str, int]],
@@ -144,6 +169,7 @@ def scan_months(
     origin: str = "SJO",
     min_nights: int | None = None,
     max_nights: int | None = None,
+    halves: bool = False,
 ) -> list[MonthHint]:
     """One request per month; returns whatever hints came back.
 
@@ -152,9 +178,14 @@ def scan_months(
     is skipped rather than aborting the sweep — a wide net with a hole in it
     still beats no net.
     """
+    probes = [(f"in {label}", label, year) for label, year in months]
+    if halves:
+        probes += month_halves(months)
+
     hints: list[MonthHint] = []
-    for label, year in months:
-        query = f"Flights from {origin} to {destination} in {label}"
+    seen_windows: set[str] = set()
+    for fragment, label, year in probes:
+        query = f"Flights from {origin} to {destination} {fragment}"
         try:
             html = fetch(query)
         except Exception:
@@ -168,6 +199,9 @@ def scan_months(
             continue
         if max_nights is not None and hint.nights > max_nights:
             continue
+        if hint.key in seen_windows:
+            continue          # halves often repeat the month's own answer
+        seen_windows.add(hint.key)
         hints.append(hint)
     return hints
 
