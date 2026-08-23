@@ -43,6 +43,38 @@ remains is live verification, not a rewrite.
    parameters only; `preferences.json` and `.env` are gitignored. The
    repository must stay publishable as-is.
 
+## Never query Google from two places at once
+
+This is enforced by `tracker/gate.py`, not left to discipline, and the
+enforcement is there because being careful demonstrably was not enough.
+
+Measured 2026-08-23: a second process pricing windows alongside the sweep
+took the hit rate from 87% to 24%. Google answered in 3-4 seconds with
+empty pages, and the sweep recorded each one as "no fares on this date".
+The failure is silent - no error, no exception, just windows quietly
+written off - which is what makes it dangerous.
+
+And the collision was structural, not an accident of testing. The sweep
+runs continuously and the scheduled tracker runs six times a day, so they
+were always going to overlap, roughly every four hours, forever.
+
+So every path that reaches Google takes the lock first: the sweep around
+each window, `cli.py` around each of its three search phases (wide net,
+HTTP grid, Chrome verification), and any diagnostic script anybody ever
+writes. **If you add a script that queries Google, wrap it in
+`gate.google("your-name")`.** There is no exception for "just one quick
+check" - that is exactly what caused this.
+
+The granularity matters. The sweep takes and releases per *window*, so it
+never holds the lock more than ~20 seconds and a scheduled run waits one
+window rather than queuing behind a fourteen-hour pass.
+
+On timeout the waiter proceeds anyway rather than raising. A scheduled run
+that skips its email because a lock file was untidy is a worse outcome than
+one extra concurrent request, and the throttle detection catches the
+latter. Stale locks - dead PID, or no heartbeat for ten minutes - are
+broken rather than waited out.
+
 ## Layout
 
 ```

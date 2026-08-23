@@ -12,7 +12,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from . import (
-    alerts, config as config_mod, email_render, history, monthly, notify,
+    alerts, config as config_mod, email_render, gate, history, monthly, notify,
     pricing, ranking, schedule, sweeper, throttle, verify as verify_mod,
 )
 from .itinerary import Itinerary, dedupe, format_price, partition
@@ -192,15 +192,16 @@ def run(argv: list[str] | None = None) -> int:
     if cfg.monthly_scan and not args.status:
         early, late = prefs.window_on(None)
         nights = prefs.nights_options
-        month_hints = monthly.scan_months(
-            fetch_text_query,
-            monthly.months_in_window(early, late),
-            destination=cfg.monthly_scan_destination,
-            origin=cfg.origins[0],
-            min_nights=min(nights) if nights else None,
-            max_nights=max(nights) if nights else None,
-            halves=cfg.monthly_scan_halves,
-        )
+        with gate.google("run:wide-net", path=cfg.google_lock):
+            month_hints = monthly.scan_months(
+                fetch_text_query,
+                monthly.months_in_window(early, late),
+                destination=cfg.monthly_scan_destination,
+                origin=cfg.origins[0],
+                min_nights=min(nights) if nights else None,
+                max_nights=max(nights) if nights else None,
+                halves=cfg.monthly_scan_halves,
+            )
         asked = len(monthly.months_in_window(early, late))
         for h in month_hints:
             log.info("Month hint  %s", h.describe())
@@ -261,8 +262,9 @@ def run(argv: list[str] | None = None) -> int:
              format_price(cfg.good_price_usd), format_price(cfg.great_price_usd))
 
     searcher = Searcher(delay=cfg.request_delay_seconds, max_requests=budget)
-    accepted, rejected, errors, sample, google_bands = collect(
-        cfg, plan, searcher, probe_destinations=probe)
+    with gate.google("run:grid", path=cfg.google_lock):
+        accepted, rejected, errors, sample, google_bands = collect(
+            cfg, plan, searcher, probe_destinations=probe)
     judged_requests, empties = sample
 
     log.info("Throttle: %s",
@@ -326,13 +328,14 @@ def run(argv: list[str] | None = None) -> int:
             today=datetime.now(CR_TZ).date(),
             min_lead_days=prefs.min_lead_days,
         )
-        verified = verify_mod.verify(
-            targets,
-            origin=cfg.origins[0], destination=cfg.chrome_destination,
-            max_stops=cfg.max_stops, chrome_override=cfg.chrome_path,
-            timeout_s=cfg.chrome_timeout_s, budget_ms=cfg.chrome_budget_ms,
-            sleep=time.sleep, delay_s=cfg.request_delay_seconds,
-        )
+        with gate.google("run:chrome", path=cfg.google_lock):
+            verified = verify_mod.verify(
+                targets,
+                origin=cfg.origins[0], destination=cfg.chrome_destination,
+                max_stops=cfg.max_stops, chrome_override=cfg.chrome_path,
+                timeout_s=cfg.chrome_timeout_s, budget_ms=cfg.chrome_budget_ms,
+                sleep=time.sleep, delay_s=cfg.request_delay_seconds,
+            )
     # Fold in whatever the background sweep has found since the last run.
     # It walks every window in the space, so it reaches dates this run's
     # twenty Chrome launches never touch. A missing store just means the

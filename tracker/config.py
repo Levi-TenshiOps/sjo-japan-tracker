@@ -121,6 +121,10 @@ class Config:
     # can interleave a line; separate files cost nothing and the baseline
     # simply reads both.
     sweep_history_csv: str = "sweep_history.csv"
+    # One process queries Google at a time. The sweep runs continuously and
+    # the scheduled tracker six times a day, so without this they overlap
+    # roughly every four hours - and the symptom is silence, not an error.
+    google_lock: str = "google.lock"
     # How stale a swept price may be before the email stops showing it. The
     # store keeps findings for longer so the sweep can tell what it has
     # already seen, but a price is a snapshot: presenting a day-old number

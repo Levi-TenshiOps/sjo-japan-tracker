@@ -581,3 +581,33 @@ class TestRecoveryAfterThrottling:
         s = SweepStore(recent=[0] * 20)
         text = s.health()
         assert "THROTTLED" not in text and "empty rate 0%" in text
+
+
+class TestSweepRespectsTheLock:
+    """The sweep must never query Google while a scheduled run is doing so."""
+
+    def test_the_lock_is_taken_per_window(self, dom, tmp_path):
+        """Per window, not per run: a scheduled run waits ~12s, not 14 hours."""
+        lock = tmp_path / "google.lock"
+        seen = []
+
+        def watching_fetch(url):
+            seen.append(lock.exists())
+            return dom
+
+        sweep_batch(windows(3), SweepStore(), batch=3, fetch=watching_fetch,
+                    sleep=lambda _: None, delay_s=0, lock_path=str(lock))
+        assert seen == [True, True, True], "every fetch must hold the lock"
+
+    def test_the_lock_is_released_between_windows(self, dom, tmp_path):
+        lock = tmp_path / "google.lock"
+        sweep_batch(windows(2), SweepStore(), batch=2, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0, lock_path=str(lock))
+        assert not lock.exists(), "a held lock would block the scheduled runs"
+
+    def test_a_fetch_failure_still_releases_it(self, dom, tmp_path):
+        lock = tmp_path / "google.lock"
+        sweep_batch(windows(3), SweepStore(), batch=2,
+                    fetch=FakeChrome(dom, fail_on={1}),
+                    sleep=lambda _: None, delay_s=0, lock_path=str(lock))
+        assert not lock.exists()

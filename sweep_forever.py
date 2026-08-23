@@ -135,6 +135,7 @@ def main() -> int:
                 chrome_override=cfg.chrome_path, timeout_s=cfg.chrome_timeout_s,
                 budget_ms=cfg.chrome_budget_ms, delay_s=args.delay,
                 on_find=announce, history_csv=cfg.sweep_history_csv,
+                lock_path=cfg.google_lock,
             )
         except Exception as exc:            # noqa: BLE001 - must not die
             log.warning("batch failed (%s); pausing 60s", exc)

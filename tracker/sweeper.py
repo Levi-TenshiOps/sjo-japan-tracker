@@ -44,6 +44,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
+from . import gate
 from . import history as history_mod
 from .browser import BrowserOption, chrome_path, fetch_dom, parse_options
 from .verify import booking_link
@@ -341,6 +342,8 @@ def sweep_batch(
     delay_s: float = 8.0,
     on_find: Callable[[Discovery], None] | None = None,
     history_csv: str | None = None,
+    lock_path: str = gate.DEFAULT_LOCK,
+    lock_timeout: float = 300.0,
 ) -> int:
     """Price the next `batch` windows, advancing and wrapping the cursor.
 
@@ -393,7 +396,10 @@ def sweep_batch(
         url = _search_url(origin, destination, depart, ret, max_stops)
         started = time.monotonic()
         try:
-            dom = grab(url)
+            # Per window, not per run. Holding it for a whole pass would
+            # make the scheduled runs queue behind fourteen hours of sweep.
+            with gate.google("sweep", path=lock_path, timeout=lock_timeout):
+                dom = grab(url)
         except Exception as exc:            # noqa: BLE001 - never die mid-sweep
             log.debug("sweep fetch failed for %s: %s", depart, exc)
             dom = ""
