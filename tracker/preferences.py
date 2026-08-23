@@ -238,29 +238,39 @@ class Preferences:
             return True
         return d.month in set(self.excluded_months)
 
-    def searched_months(self, today: Date | None = None) -> list[tuple[int, int]]:
-        """(year, month) actually searched, in the order the sweep walks them."""
+    def months_in_horizon(self, today: Date | None = None) -> list[tuple[int, int]]:
+        """(year, month) the horizon spans, before any month filtering."""
         early, late = self.window_on(today)
         early = max(early, (today or Date.today())
                     + timedelta(days=self.min_lead_days))
         out, y, m = [], early.year, early.month
         while (y, m) <= (late.year, late.month):
-            if not self.is_excluded_month(Date(y, m, 1)):
-                out.append((y, m))
+            out.append((y, m))
             m += 1
             if m == 13:
                 m, y = 1, y + 1
         return out
+
+    def searched_months(self, today: Date | None = None) -> list[tuple[int, int]]:
+        """(year, month) actually searched, in the order the sweep walks them."""
+        return [(y, m) for y, m in self.months_in_horizon(today)
+                if not self.is_excluded_month(Date(y, m, 1))]
 
     def unreachable_months(self, today: Date | None = None) -> list[int]:
         """Named months the horizon never reaches, so they search nothing.
 
         A silent miss here looks exactly like a month with no cheap fares,
         which is the worst possible failure mode for this project.
+
+        Measured against the *horizon*, deliberately, not against what is
+        searched. A month named in `included_months` and then also listed in
+        `excluded_months` is reachable and deliberately skipped - reporting
+        it as "outside the horizon" would send the reader off to raise
+        `search_months`, which would change nothing at all.
         """
         if not self.included_months:
             return []
-        reachable = {m for _y, m in self.searched_months(today)}
+        reachable = {m for _y, m in self.months_in_horizon(today)}
         return sorted(set(self.included_months) - reachable)
 
     @property
@@ -326,7 +336,7 @@ class Preferences:
             span = f"{named}  (looking up to {self.search_months} months ahead)"
         else:
             span = (
-                f"next {self.search_months} months ({early} to {late})"
+                f"the next {self.search_months} months ({early} to {late})"
                 if self.is_rolling else f"{early} to {late} (pinned)"
             )
         pct = int(self.priority_share * 100)

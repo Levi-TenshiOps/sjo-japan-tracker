@@ -469,3 +469,51 @@ class TestAMonthTheHorizonCannotReach:
 
     def test_nothing_named_means_nothing_unreachable(self):
         assert self.prefs([]).unreachable_months(today=date(2026, 8, 23)) == []
+
+
+class TestBugsFoundInTheMonthAudit:
+    """Five defects the first month-filtering pass shipped, 2026-08-23.
+
+    All five passed the suite that existed when they were written, which is
+    the point: the tests covered the happy path of a feature and none of the
+    seams around it.
+    """
+
+    def prefs(self, **kw):
+        base = dict(alert_email="a@b.c", search_months=8, min_lead_days=21,
+                    departure_step_days=1, trip_weeks=[3], extra_nights=[],
+                    destinations=["TYO"], priority_months=[])
+        base.update(kw)
+        return Preferences(**base)
+
+    def test_an_excluded_month_is_not_called_unreachable(self):
+        """It is reachable and deliberately skipped.
+
+        Reporting it as outside the horizon sends the reader off to raise
+        search_months, which would change nothing at all.
+        """
+        p = self.prefs(included_months=[10, 11], excluded_months=[11])
+        assert p.unreachable_months(today=date(2026, 8, 23)) == []
+        assert p.searched_months(today=date(2026, 8, 23)) == [(2026, 10)]
+
+    def test_a_genuinely_unreachable_month_is_still_caught(self):
+        """The fix must not silence the real case."""
+        p = self.prefs(included_months=[1, 6])
+        assert p.unreachable_months(today=date(2026, 8, 23)) == [6]
+
+    def test_the_default_description_reads_properly(self):
+        """'Depart in next 8 months' - the article was lost in an edit."""
+        line = self.prefs().describe(today=date(2026, 8, 23)).splitlines()[0]
+        assert line.startswith("Depart in the next 8 months"), line
+
+    def test_the_named_month_description_still_reads_properly(self):
+        line = self.prefs(included_months=[1, 2]).describe(
+            today=date(2026, 8, 23)).splitlines()[0]
+        assert line.startswith("Depart in January 2027, February 2027"), line
+
+    def test_months_in_horizon_ignores_the_month_filters(self):
+        """It answers 'what can the horizon reach', nothing else."""
+        wide = self.prefs().months_in_horizon(today=date(2026, 8, 23))
+        narrow = self.prefs(included_months=[1]).months_in_horizon(
+            today=date(2026, 8, 23))
+        assert wide == narrow

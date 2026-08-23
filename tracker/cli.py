@@ -74,6 +74,20 @@ def _throttle_sample(searcher: Searcher, found) -> tuple[int, int]:
     return empty, total or searcher.requests_made
 
 
+def wide_net_months(prefs, today=None) -> list[tuple[str, int]]:
+    """(label, year) the wide net should ask about: what is actually searched.
+
+    Driving this from the raw horizon instead was a real bug, found
+    2026-08-23. After September and April were excluded the net kept
+    querying them - six wasted requests a run - and worse, a hint for an
+    excluded month went onto the *front* of the hot list, spent Chrome
+    budget verifying it, and could have put a fare in the email for a month
+    the trip owner had explicitly ruled out.
+    """
+    return [(f"{monthly.MONTH_FULL[m]} {y}", y)
+            for y, m in prefs.searched_months(today)]
+
+
 def _rotate(items: list[str], by: int) -> list[str]:
     """items rotated left by `by`, so a truncated sweep still covers them all."""
     if not items:
@@ -227,12 +241,18 @@ def run(argv: list[str] | None = None) -> int:
     # ordinary search, where itinerary.validate() still rules on the visa.
     month_hints: list = []
     if cfg.monthly_scan and not args.status:
-        early, late = prefs.window_on(None)
         nights = prefs.nights_options
+        # Ask only about months actually being searched. Driving this from
+        # the raw horizon meant the net kept querying September and April
+        # after the trip owner excluded them - six wasted requests a run,
+        # and worse: a hint for an excluded month went onto the front of the
+        # hot list, spent Chrome budget, and could reach the email as a fare
+        # in a month they had ruled out.
+        months_asked = wide_net_months(prefs)
         with gate.google("run:wide-net", path=cfg.google_lock):
             month_hints = monthly.scan_months(
                 fetch_text_query,
-                monthly.months_in_window(early, late),
+                months_asked,
                 destination=cfg.monthly_scan_destination,
                 origin=cfg.origins[0],
                 min_nights=min(nights) if nights else None,
@@ -240,7 +260,6 @@ def run(argv: list[str] | None = None) -> int:
                 halves=cfg.monthly_scan_halves,
                 delay_s=cfg.monthly_scan_delay_seconds,
             )
-        months_asked = monthly.months_in_window(early, late)
         # The real probe count, not the month count. With `halves` on the
         # net sends 8 whole-month queries plus 16 half-month ones, and this
         # line reported "8 requests" for all 24 of them - which quietly
@@ -312,9 +331,11 @@ def run(argv: list[str] | None = None) -> int:
         # January to March and nothing else - while the wide net had been
         # asking about every month, six times a day, since the start.
         ledger = monthly.load_ledger(cfg.month_ledger)
+        searched = [label for label, _year in wide_net_months(prefs)]
         print("\nWide net, cheapest seen per month:")
         for line in monthly.format_ledger(ledger,
-                                          threshold=prefs.good_price_usd):
+                                          threshold=prefs.good_price_usd,
+                                          only=searched):
             print(line)
         return 0
 

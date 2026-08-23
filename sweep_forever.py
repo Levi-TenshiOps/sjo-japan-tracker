@@ -130,6 +130,24 @@ def main() -> int:
                 print(f"  {d.describe()}{flag}")
         return 0
 
+    # Zero windows is a configuration mistake, not a state to sit in. Every
+    # named month can be outside the horizon - `included_months: [6]` with
+    # an 8-month horizon starting in August - and `sweep_batch` then returns
+    # immediately with nothing to price. The outer loop has no sleep of its
+    # own, because the pacing lives per-window, so the process would spin at
+    # full speed rewriting the store forever.
+    if not windows:
+        log.error("No travel windows to sweep. Check `included_months` and "
+                  "`excluded_months` in %s: %s", args.preferences,
+                  prefs.describe())
+        missed = prefs.unreachable_months()
+        if missed:
+            from tracker.preferences import MONTH_NAMES
+            log.error("These months are outside the %d-month horizon and "
+                      "search nothing at all: %s", prefs.search_months,
+                      ", ".join(MONTH_NAMES[m] for m in missed))
+        return 2
+
     if chrome_path(cfg.chrome_path) is None:
         log.error("Chrome not found. Install it, or set chrome_path in %s",
                   args.config)
@@ -155,8 +173,9 @@ def main() -> int:
             log.debug("new best for window: %s", d.describe())
 
     while True:
+        priced = 0
         try:
-            sweep_batch(
+            priced = sweep_batch(
                 windows, store,
                 origin=cfg.origins[0], destination=cfg.chrome_destination,
                 max_stops=cfg.max_stops, batch=args.batch,
@@ -184,6 +203,14 @@ def main() -> int:
         if args.once or _stop:
             log.info("Stopped. %s", store.progress(len(windows)))
             return 0
+
+        if not priced:
+            # Nothing was priced and nothing raised. Do not come straight
+            # back round: the delays live inside sweep_batch, so an empty
+            # batch means this loop has no pacing at all.
+            log.warning("A batch priced no windows; pausing 60s rather than "
+                        "spinning.")
+            time.sleep(60)
 
 
 if __name__ == "__main__":

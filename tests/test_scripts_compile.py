@@ -108,3 +108,33 @@ def test_missing_preferences_fails_with_advice_not_a_traceback():
     assert done.returncode == 2, done.stdout
     assert "setup_tracker.py" in (done.stderr or ""), done.stderr
     assert "Traceback" not in (done.stderr or "")
+
+
+def test_a_config_that_searches_nothing_is_refused(tmp_path):
+    """It must exit, not sit in a loop pricing nothing.
+
+    Found 2026-08-23. `included_months: [6]` against an 8-month horizon
+    starting in August names a month the horizon never reaches, so
+    `generate_windows` returns an empty list and `sweep_batch` returns
+    immediately. The outer loop has no sleep of its own - the pacing lives
+    per-window - so the process spun at full speed rewriting the store.
+    """
+    import json
+    prefs = json.loads((ROOT / "preferences.example.json").read_text(
+        encoding="utf-8"))
+    prefs["included_months"] = [6]      # unreachable from any 8-month horizon
+    prefs["priority_months"] = []
+    prefs["search_months"] = 8
+    path = tmp_path / "prefs.json"
+    path.write_text(json.dumps(prefs), encoding="utf-8")
+
+    done = subprocess.run(
+        [sys.executable, str(ROOT / "sweep_forever.py"),
+         "--preferences", str(path), "--log", "",
+         "--store", str(tmp_path / "store.json")],
+        capture_output=True, text=True, timeout=90, cwd=str(ROOT))
+    assert done.returncode == 2, (
+        f"expected a refusal, got {done.returncode}. stdout={done.stdout[:400]}")
+    assert "No travel windows" in done.stderr, done.stderr
+    assert not (tmp_path / "store.json").exists(), (
+        "it must not have started writing a store")

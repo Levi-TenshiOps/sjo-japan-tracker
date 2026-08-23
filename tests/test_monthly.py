@@ -399,3 +399,70 @@ class TestTheRequestCountIsReportedHonestly:
         assert len(months) == 8
         assert len(monthly.probe_count(months)) == 8
         assert len(monthly.probe_count(months, halves=True)) == 24
+
+
+class TestHalfMonthHintsFoldIntoTheirMonth:
+    """A half-month probe is a finer look at the same month, not a new one.
+
+    `month_halves` labels its probes "January 2027 (1st half)". Keying the
+    ledger on that gave three rows per month, so a month whose whole-month
+    query returned nothing read "no hint yet" while a half-month row beside
+    it held a real price. Found 2026-08-23 before it could happen live -
+    that day's hints all came from whole-month queries.
+    """
+
+    def hint(self, month, price):
+        return MonthHint(month=month, depart=Date(2027, 1, 5),
+                         ret=Date(2027, 2, 1), price_usd=price)
+
+    def test_the_suffix_is_stripped(self):
+        assert self.hint("January 2027 (1st half)", 1).base_month == "January 2027"
+        assert self.hint("January 2027 (2nd half)", 1).base_month == "January 2027"
+
+    def test_a_whole_month_label_is_untouched(self):
+        assert self.hint("January 2027", 1).base_month == "January 2027"
+
+    def test_halves_do_not_create_extra_ledger_rows(self, tmp_path):
+        p = tmp_path / "led.json"
+        monthly.record_hints(p, [
+            self.hint("January 2027 (1st half)", 1387),
+            self.hint("January 2027 (2nd half)", 1900),
+        ], asked=["January 2027"])
+        months = monthly.load_ledger(p)["months"]
+        assert list(months) == ["January 2027"], months
+
+    def test_a_half_month_price_counts_as_the_months_best(self):
+        """The whole point of asking about halves at all."""
+        import tempfile, pathlib
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "led.json"
+            monthly.record_hints(p, [self.hint("January 2027", 1900)],
+                                 asked=["January 2027"])
+            monthly.record_hints(p, [self.hint("January 2027 (2nd half)", 1387)],
+                                 asked=["January 2027"])
+            row = monthly.load_ledger(p)["months"]["January 2027"]
+            assert row["best_usd"] == 1387
+
+
+class TestTheLedgerDisplayIsScopedToSearchedMonths:
+    def ledger(self, tmp_path):
+        p = tmp_path / "led.json"
+        monthly.record_hints(p, [
+            MonthHint(month="September 2026", depart=Date(2026, 9, 1),
+                      ret=Date(2026, 9, 28), price_usd=1700),
+            MonthHint(month="January 2027", depart=Date(2027, 1, 5),
+                      ret=Date(2027, 2, 1), price_usd=1400),
+        ], asked=["September 2026", "January 2027"])
+        return monthly.load_ledger(p)
+
+    def test_months_no_longer_searched_are_hidden(self, tmp_path):
+        lines = monthly.format_ledger(self.ledger(tmp_path),
+                                      only=["January 2027"])
+        assert len(lines) == 1 and "January 2027" in lines[0]
+
+    def test_the_data_itself_is_kept(self, tmp_path):
+        """A price seen in September is still a true fact about September."""
+        assert "September 2026" in self.ledger(tmp_path)["months"]
+
+    def test_no_filter_shows_everything(self, tmp_path):
+        assert len(monthly.format_ledger(self.ledger(tmp_path))) == 2

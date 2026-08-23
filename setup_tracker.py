@@ -146,8 +146,8 @@ def main() -> int:
     if prefs.included_months:
         # Priority is a subset of what is searched, so say so here rather
         # than failing validation after every other question is answered.
-        names = ", ".join(MONTH_NAMES[m] for m in sorted(prefs.included_months))
-        print(f"     Must be among the months you chose to search: {names}.")
+        print(f"     Must be among the months you chose to search: "
+              f"{prefs.included_label}.")
     while True:
         prefs.priority_months = ask_months(
             "     Priority months",

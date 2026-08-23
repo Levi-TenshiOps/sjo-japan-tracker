@@ -209,6 +209,37 @@ full exhaustive pass in 4.1 days at 90s, 2.1 days at 45s, 1.4 days at 30s.
 `setup_tracker.py` asks for this, so re-running setup no longer silently
 resets it to "every month" and brings April and September back.
 
+### Seven defects the first version of this shipped
+
+Audited on request the same day. All seven passed the suite as it stood,
+which is the lesson: the tests covered the feature's happy path and none of
+the seams around it.
+
+1. **The wide net kept querying excluded months.** It was driven by the raw
+   horizon, not by what is searched. Six wasted requests a run is the small
+   half - a hint goes on the *front* of the hot list and is Chrome-verified,
+   so a fare in an excluded month could have reached the email. `cli.py` had
+   no tests at all, which is how it got through; `wide_net_months` is now a
+   named function with its own test file.
+2. **An excluded month was reported as "outside the horizon".** It is
+   reachable and deliberately skipped. The message sent the reader off to
+   raise `search_months`, which would change nothing. `unreachable_months`
+   now measures against `months_in_horizon`, before any filtering.
+3. **Half-month hints fragmented the ledger.** `month_halves` labels probes
+   "January 2027 (1st half)", so the ledger grew three rows per month and a
+   month could read "no hint yet" beside a half-month row holding a real
+   price. `MonthHint.base_month` folds them.
+4. **`--status` showed months no longer searched.** September and April sat
+   in the ledger with old prices next to hours-old ones. The data is kept -
+   a price seen in September is still true - but the display is scoped.
+5. **A config that searches nothing spun.** Every named month can be outside
+   the horizon (`included_months: [6]` in August), and `sweep_batch` then
+   returns immediately. The outer loop has no sleep of its own, because the
+   pacing is per-window, so the process rewrote the store at full speed.
+   It exits 2 with an explanation now, and an empty batch pauses regardless.
+6. **`describe()` lost an article** - "Depart in next 8 months".
+7. **`included_label` was dead code**, duplicated inline in the wizard.
+
 ## Raising the sweep rate
 
 Agreed with the trip owner 2026-08-23: **raise the rate, but only after one

@@ -92,9 +92,25 @@ class MonthHint:
         """Must match `schedule.Window.key` exactly or the hot list misses."""
         return f"{self.depart.isoformat()}_{self.ret.isoformat()}"
 
+    @property
+    def base_month(self) -> str:
+        """The whole-month label, with any half-month suffix removed.
+
+        `month_halves` labels its probes "January 2027 (1st half)". Keying
+        the ledger on that would give three rows per month instead of one,
+        so a month whose whole-month query returned nothing would read
+        "no hint yet" while a half-month row beside it held a real price.
+        Halves are a finer probe of the same month, not a different one.
+        """
+        return _HALF_LABEL.sub("", self.month)
+
     def describe(self) -> str:
         return (f"{self.month}: {self.depart} -> {self.ret} "
                 f"({self.nights}n) ${self.price_usd:,}")
+
+
+# Matches the suffix `month_halves` appends: "January 2027 (1st half)".
+_HALF_LABEL = re.compile(r"\s*\((?:1st|2nd) half\)$")
 
 
 def visible_text(html: str) -> str:
@@ -315,7 +331,7 @@ def record_hints(path: str | Path, hints: Iterable[MonthHint], *,
         months[label]["asks"] = int(months[label].get("asks", 0)) + 1
 
     for h in hints:
-        row = months.setdefault(h.month, {
+        row = months.setdefault(h.base_month, {
             "best_usd": None, "best_depart": "", "best_ret": "", "best_seen": "",
             "last_usd": None, "last_depart": "", "last_ret": "", "last_seen": "",
             "hits": 0, "asks": 1,
@@ -336,9 +352,20 @@ def record_hints(path: str | Path, hints: Iterable[MonthHint], *,
     return ledger
 
 
-def format_ledger(ledger: dict, *, threshold: int | None = None) -> list[str]:
-    """Human-readable lines, cheapest month first, for --status."""
+def format_ledger(ledger: dict, *, threshold: int | None = None,
+                  only: Iterable[str] | None = None) -> list[str]:
+    """Human-readable lines, cheapest month first, for --status.
+
+    `only` limits the display to the months currently being searched. The
+    ledger itself keeps everything - a price observed in September is still
+    a true fact about September - but showing a month nobody is searching
+    any more, beside months that were priced an hour ago, invites reading
+    it as current.
+    """
     months = ledger.get("months", {})
+    if only is not None:
+        keep = set(only)
+        months = {k: v for k, v in months.items() if k in keep}
     if not months:
         return ["No month hints recorded yet."]
 
