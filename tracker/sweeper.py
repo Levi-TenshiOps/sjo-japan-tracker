@@ -149,6 +149,7 @@ class SweepStore:
     windows_priced: int = 0
     pass_started: str = ""
     last_active: str = ""
+    last_key: str = ""          # window key the cursor last finished
     found: dict = field(default_factory=dict)
 
     # -- persistence -------------------------------------------------------
@@ -253,6 +254,27 @@ def sweep_order(windows: Sequence) -> list:
     return priority + rest
 
 
+def resume_index(windows: Sequence, store: "SweepStore") -> int:
+    """Where to carry on, by window rather than by position.
+
+    The window list is rebuilt every run against today's date, so it is not
+    a fixed array. Each day the earliest departure falls out of the rolling
+    8-month span and a new one appears at the far end - 18 windows off the
+    front, 18 onto the back, measured. Everything after the removed ones
+    shifts down by 18 positions, so a numeric cursor silently jumps 18
+    windows forward and those are never priced on that pass.
+
+    Resuming by the last finished window's key instead makes the position
+    mean the same thing across days. If that window has itself expired,
+    fall back to the stored index, which is no worse than before.
+    """
+    if store.last_key:
+        for n, w in enumerate(windows):
+            if w.key == store.last_key:
+                return (n + 1) % max(len(windows), 1)
+    return min(store.cursor, max(len(windows) - 1, 0))
+
+
 def sweep_batch(
     windows: Sequence,
     store: SweepStore,
@@ -287,6 +309,10 @@ def sweep_batch(
                                            virtual_time_budget_ms=budget_ms))
     if not store.pass_started:
         store.pass_started = _now()
+
+    # Re-anchor on the window we actually finished, not on a raw index into
+    # a list that shifts under us every day.
+    store.cursor = resume_index(windows, store)
 
     done = 0
     for _ in range(batch):
@@ -326,6 +352,7 @@ def sweep_batch(
                 except OSError as exc:
                     log.debug("could not log sweep rows: %s", exc)
 
+        store.last_key = w.key
         store.cursor += 1
         store.windows_priced += 1
         store.last_active = _now()

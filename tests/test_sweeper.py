@@ -361,3 +361,72 @@ class TestSweepFeedsTheBaseline:
                         sleep=lambda _: None, delay_s=0, history_csv=str(csv_path))
         rows = list(csv.DictReader(csv_path.open(encoding="utf-8")))
         assert len(rows) == 3
+
+
+class TestResumingSurvivesTheListShifting:
+    """The window list is rebuilt daily, so an index is not a stable address.
+
+    Each day the earliest departure falls out of the rolling 8-month span
+    and a new one appears at the end - measured at 18 off the front and 18
+    onto the back. Everything after the removed ones shifts down by 18, so a
+    numeric cursor silently skips 18 windows on that pass.
+    """
+
+    def _list(self, start_day, n=12):
+        return [Window(start_day + timedelta(days=i),
+                       start_day + timedelta(days=i + 27)) for i in range(n)]
+
+    def test_resumes_at_the_window_after_the_last_finished(self):
+        from tracker.sweeper import resume_index
+        ws = self._list(date(2027, 1, 1))
+        s = SweepStore(cursor=99, last_key=ws[4].key)
+        assert resume_index(ws, s) == 5
+
+    def test_a_shifted_list_still_resumes_at_the_right_window(self):
+        """The whole point: same window, different index."""
+        from tracker.sweeper import resume_index
+        today = self._list(date(2027, 1, 1))
+        target = today[6]
+        # Tomorrow: three windows dropped off the front.
+        tomorrow = today[3:] + self._list(date(2027, 1, 13), 3)
+        s = SweepStore(cursor=7, last_key=target.key)
+        i = resume_index(tomorrow, s)
+        assert tomorrow[i - 1].key == target.key, "must land after the same window"
+        assert i != 7, "a raw index would have skipped three windows"
+
+    def test_falls_back_to_the_index_when_the_window_expired(self):
+        from tracker.sweeper import resume_index
+        ws = self._list(date(2027, 1, 1))
+        s = SweepStore(cursor=4, last_key="1999-01-01_1999-01-28")
+        assert resume_index(ws, s) == 4
+
+    def test_no_key_yet_uses_the_index(self):
+        from tracker.sweeper import resume_index
+        assert resume_index(self._list(date(2027, 1, 1)), SweepStore(cursor=3)) == 3
+
+    def test_finishing_the_last_window_wraps_to_the_start(self):
+        from tracker.sweeper import resume_index
+        ws = self._list(date(2027, 1, 1))
+        s = SweepStore(last_key=ws[-1].key)
+        assert resume_index(ws, s) == 0
+
+    def test_an_index_past_the_end_is_clamped(self):
+        from tracker.sweeper import resume_index
+        ws = self._list(date(2027, 1, 1), 5)
+        assert resume_index(ws, SweepStore(cursor=900)) == 4
+
+    def test_sweeping_records_the_key_it_finished(self, dom):
+        s = SweepStore()
+        ws = self._list(date(2027, 1, 1))
+        sweep_batch(ws, s, batch=3, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        assert s.last_key == ws[2].key
+
+    def test_the_key_survives_a_save_and_reload(self, dom, tmp_path):
+        p = tmp_path / "d.json"
+        s = SweepStore()
+        ws = self._list(date(2027, 1, 1))
+        sweep_batch(ws, s, batch=2, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        s.save(p)
+        assert SweepStore.load(p).last_key == ws[1].key
