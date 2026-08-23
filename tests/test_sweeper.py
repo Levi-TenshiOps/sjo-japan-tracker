@@ -220,14 +220,13 @@ class TestSweeping:
         assert s.found == {}
         assert s.cursor >= 1, "an all-empty run must still make progress"
 
-    def test_a_retried_window_is_not_queued_again(self):
-        """Otherwise a genuinely empty window loops forever and the sweep
-        never advances."""
+    def test_an_all_empty_sweep_still_makes_progress(self):
+        """A window must never be able to trap the sweep in a retry loop."""
         s = SweepStore()
         for _ in range(6):
             sweep_batch(windows(3), s, batch=3, fetch=FakeChrome(""),
                         sleep=lambda _: None, delay_s=0)
-        assert len(s.retry) <= 3
+        assert len(s.suspect) <= 3, "at most one entry per window"
         assert s.windows_priced >= 12
 
     def test_no_windows_is_a_no_op(self, dom):
@@ -235,10 +234,19 @@ class TestSweeping:
         assert sweep_batch([], s, fetch=FakeChrome(dom)) == 0
 
     def test_delay_is_honoured_between_launches(self, dom):
+        """Jittered around the configured value, never a metronome."""
         naps = []
         sweep_batch(windows(3), SweepStore(), batch=3, fetch=FakeChrome(dom),
                     sleep=naps.append, delay_s=8.0)
-        assert naps == [8.0, 8.0, 8.0]
+        assert len(naps) == 3
+        assert all(6.0 <= n <= 10.0 for n in naps), naps
+
+    def test_the_delay_is_not_a_metronome(self, dom):
+        """A request every N seconds on a perfect clock is a fingerprint."""
+        naps = []
+        sweep_batch(windows(30), SweepStore(), batch=12, fetch=FakeChrome(dom),
+                    sleep=naps.append, delay_s=8.0)
+        assert len(set(naps)) > 1, "identical waits every time would stand out"
 
     def test_on_find_fires_only_for_a_new_best(self, dom):
         seen = []
@@ -485,26 +493,26 @@ class TestThrottleDetection:
         s = SweepStore()
         sweep_batch(windows(3), s, batch=3, fetch=FakeChrome(""),
                     sleep=lambda _: None, delay_s=0)
-        assert s.retry, "a fast empty is not trustworthy and must be re-checked"
+        assert s.suspect, "a fast empty is not trustworthy and must be re-checked"
 
     def test_a_window_with_fares_is_never_queued(self, dom):
         s = SweepStore()
         sweep_batch(windows(3), s, batch=3, fetch=FakeChrome(dom),
                     sleep=lambda _: None, delay_s=0)
-        assert s.retry == []
+        assert s.suspect == []
 
     def test_the_delay_grows_while_throttled(self, dom):
         naps = []
         s = SweepStore(recent=[1] * 40)
         sweep_batch(windows(2), s, batch=1, fetch=FakeChrome(""),
                     sleep=naps.append, delay_s=6.0)
-        assert naps and naps[0] > 6.0, "a throttled sweep must slow down"
+        assert naps and naps[0] > 12.0, "a throttled sweep must slow down hard"
 
     def test_the_delay_is_normal_when_healthy(self, dom):
         naps = []
         sweep_batch(windows(2), SweepStore(), batch=1, fetch=FakeChrome(dom),
                     sleep=naps.append, delay_s=6.0)
-        assert naps == [6.0]
+        assert len(naps) == 1 and 4.5 <= naps[0] <= 7.5
 
     def test_recent_does_not_grow_without_bound(self, dom):
         s = SweepStore()
@@ -512,3 +520,64 @@ class TestThrottleDetection:
             sweep_batch(windows(5), s, batch=5, fetch=FakeChrome(dom),
                         sleep=lambda _: None, delay_s=0)
         assert len(s.recent) <= 40
+
+
+class TestRecoveryAfterThrottling:
+    """A throttled window is unverified, not empty, and must be re-checked.
+
+    A plain retry counter was not enough: if the throttle lasts an hour, the
+    retry is throttled too and the window is written off on the strength of
+    a second false answer.
+    """
+
+    def test_suspects_are_not_re_checked_while_still_throttled(self):
+        """Re-checking mid-throttle just collects another false empty."""
+        s = SweepStore(recent=[1] * 40, suspect=["2027-01-01_2027-01-28"])
+        before = list(s.suspect)
+        sweep_batch(windows(3), s, batch=1, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        assert s.suspect[:1] == before[:1], "must wait for a healthy stretch"
+
+    def test_suspects_are_re_checked_once_healthy(self, dom):
+        ws = windows(5)
+        s = SweepStore(recent=[0] * 40, suspect=[ws[4].key])
+        sweep_batch(ws, s, batch=1, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        assert ws[4].key not in s.suspect, "healthy re-check clears the doubt"
+
+    def test_a_re_check_does_not_advance_the_cursor(self, dom):
+        """Replays must not consume progress through the main list."""
+        ws = windows(5)
+        s = SweepStore(recent=[0] * 40, suspect=[ws[3].key], cursor=1,
+                       last_key=ws[0].key)
+        sweep_batch(ws, s, batch=1, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        assert s.cursor == 1
+
+    def test_a_re_check_that_finds_fares_stores_them(self, dom):
+        ws = windows(5)
+        s = SweepStore(recent=[0] * 40, suspect=[ws[2].key])
+        sweep_batch(ws, s, batch=1, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        assert s.found, "the fare that throttling hid must end up recorded"
+
+    def test_an_expired_suspect_is_dropped_not_looped_on(self):
+        s = SweepStore(recent=[0] * 40, suspect=["1999-01-01_1999-01-28"])
+        sweep_batch(windows(3), s, batch=2, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        assert "1999-01-01_1999-01-28" not in s.suspect
+
+    def test_throttle_events_are_counted_for_reporting(self):
+        s = SweepStore(recent=[1] * 40)
+        sweep_batch(windows(3), s, batch=1, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        assert s.throttle_events == 1 and s.throttled_since
+
+    def test_health_says_when_it_is_throttled(self):
+        s = SweepStore(recent=[1] * 20, throttled_since="2026-08-23T14:00:00+00:00")
+        assert "THROTTLED NOW" in s.health()
+
+    def test_health_is_quiet_when_all_is_well(self):
+        s = SweepStore(recent=[0] * 20)
+        text = s.health()
+        assert "THROTTLED" not in text and "empty rate 0%" in text

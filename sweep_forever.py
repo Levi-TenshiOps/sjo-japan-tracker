@@ -16,11 +16,15 @@ Leave it running in its own terminal, or install it as a service. It is
 safe to stop at any time: the cursor is saved after every batch, so it
 resumes where it left off rather than starting the pass again.
 
-On pacing: at the default 8-second delay a launch cycle is roughly 21
-seconds, so a ~4,000-window pass takes about a day. Raise `--delay` if the
-empty rate climbs; the sweep is meant to be the slowest, politest thing in
-the project, because getting the IP blocked would take the scheduled runs
-down with it.
+On pacing: a Chrome launch measures ~6s, so at the default 8-second delay
+a window costs ~14s and a 4,000-window pass takes about 15 hours.
+
+Do not lower the delay to go faster, and do not query Google from anything
+else while this runs. Measured 2026-08-23, a second process doing exactly
+that halved nothing and took the hit rate from 87% to 24% - Google answered
+with empty pages in 3-4s, and every one of those was a window whose fares
+went unseen until the next pass. The sweep now detects that and backs off,
+but the cheapest fix is not to provoke it.
 """
 
 from __future__ import annotations
@@ -87,6 +91,7 @@ def main() -> int:
 
     if args.status:
         print(store.progress(len(windows)))
+        print(store.health())
         best = store.best(limit=15, threshold=None)
         if not best:
             print("No findings yet.")
@@ -105,7 +110,10 @@ def main() -> int:
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    cycle = args.delay + 13.0            # a launch measures ~13s
+    # Measured on this machine: a Chrome launch that renders a real
+    # result page takes about 6s, not the 13 this once assumed - which
+    # made the banner promise 21 hours for a pass that takes 13.5.
+    cycle = args.delay + 6.1
     log.info("Sweeping %d window(s) to %s, %.0fs apart "
              "(~%.1f h per full pass). Ctrl-C to stop.",
              len(windows), cfg.chrome_destination, args.delay,
@@ -135,6 +143,8 @@ def main() -> int:
         dropped = store.prune()
         store.save(args.store)
         under = store.best(limit=3, threshold=prefs.good_price_usd)
+        if store.suspect or store.throttled_since:
+            log.info("Health: %s", store.health())
         log.info("%s%s%s", store.progress(len(windows)),
                  f", {dropped} pruned" if dropped else "",
                  f", cheapest under threshold ${under[0].price_usd:,}" if under else "")

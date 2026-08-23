@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import tempfile
 import time
 from dataclasses import asdict, dataclass, field
@@ -152,7 +153,13 @@ class SweepStore:
     last_key: str = ""          # window key the cursor last finished
     found: dict = field(default_factory=dict)
     recent: list = field(default_factory=list)   # 1 = empty, 0 = had fares
-    retry: list = field(default_factory=list)    # windows to re-walk later
+    # Windows whose "no fares" answer arrived while the connection looked
+    # throttled. They are not empty, they are *unverified*, and they stay
+    # here until they can be re-checked during a healthy stretch.
+    suspect: list = field(default_factory=list)
+    throttle_events: int = 0
+    throttled_since: str = ""
+    last_throttle: str = ""
 
     # -- persistence -------------------------------------------------------
     @classmethod
@@ -232,6 +239,20 @@ class SweepStore:
         out.sort(key=lambda d: d.price_usd)
         return out[:limit]
 
+    def health(self) -> str:
+        """One line on whether the connection is being trusted right now."""
+        recent = self.recent[-EMPTY_ALARM_WINDOW:]
+        rate = (100 * sum(recent) / len(recent)) if recent else 0.0
+        bits = [f"empty rate {rate:.0f}% (13% is normal)"]
+        if self.suspect:
+            bits.append(f"{len(self.suspect)} window(s) awaiting a re-check")
+        if self.throttled_since:
+            bits.append("THROTTLED NOW since "
+                        f"{self.throttled_since[11:16]} UTC")
+        elif self.throttle_events:
+            bits.append(f"{self.throttle_events} throttle event(s) so far")
+        return ", ".join(bits)
+
     def progress(self, total: int) -> str:
         pct = (100.0 * self.cursor / total) if total else 0.0
         return (f"window {self.cursor}/{total} ({pct:.1f}% of this pass), "
@@ -269,6 +290,8 @@ EMPTY_ALARM_WINDOW = 20        # judge over this many recent windows
 EMPTY_ALARM_RATE = 0.60        # above this, assume throttling rather than truth
 THROTTLE_BACKOFF = 4.0         # multiply the delay while it looks throttled
 SUSPECT_FAST_SECONDS = 4.5     # a genuine page has never come back this fast
+THROTTLE_REST_SECONDS = 900    # full stop after this looks sustained
+JITTER_FRACTION = 0.25         # +/- this much on every delay
 
 
 def looks_throttled(recent: Sequence[int], *, window: int = EMPTY_ALARM_WINDOW,
@@ -351,11 +374,16 @@ def sweep_batch(
         # Anything queued for a second look comes first: those are windows
         # that answered empty while the sweep looked throttled, so their
         # "no fares" verdict was never trustworthy.
-        if store.retry:
-            key = store.retry.pop(0)
+        # A suspect window is re-checked only once the connection looks
+        # healthy again. Re-checking mid-throttle just collects another false
+        # empty and teaches us nothing, which is why a plain retry counter
+        # was not enough.
+        healthy = not looks_throttled(store.recent)
+        if store.suspect and healthy:
+            key = store.suspect.pop(0)
             w = next((x for x in windows if x.key == key), None)
             if w is None:
-                continue
+                continue            # window expired out of the rolling span
             replay = True
         else:
             w = windows[store.cursor]
@@ -398,13 +426,14 @@ def sweep_batch(
         store.recent.append(0 if options else 1)
         del store.recent[:-EMPTY_ALARM_WINDOW * 2]
         throttled = looks_throttled(store.recent)
-        # One retry per window, never more: a genuinely empty window is fast
-        # *and* empty every time, so re-queueing on a replay would loop on it
-        # forever and the sweep would stop advancing.
-        if (not options and not replay
-                and (throttled or elapsed < SUSPECT_FAST_SECONDS)
-                and w.key not in store.retry):
-            store.retry.append(w.key)
+        # An empty answer is only trustworthy when the connection is healthy
+        # AND the page took long enough to have really been rendered. Both
+        # failing means "unverified", not "no fares". A replay that comes
+        # back empty while healthy is trustworthy, so it simply leaves the
+        # list rather than looping there forever.
+        unverified = not options and (throttled or elapsed < SUSPECT_FAST_SECONDS)
+        if unverified and w.key not in store.suspect:
+            store.suspect.append(w.key)
 
         if not replay:
             store.last_key = w.key
@@ -413,13 +442,40 @@ def sweep_batch(
         store.last_active = _now()
         done += 1
 
-        nap = delay_s * (THROTTLE_BACKOFF if throttled else 1.0)
         if throttled:
-            log.warning("Empty rate %.0f%% over the last %d windows - backing "
-                        "off to %.0fs and re-queueing %d window(s)",
-                        100 * sum(store.recent[-EMPTY_ALARM_WINDOW:])
-                        / EMPTY_ALARM_WINDOW, EMPTY_ALARM_WINDOW,
-                        nap, len(store.retry))
+            if not store.throttled_since:
+                store.throttled_since = _now()
+                store.throttle_events += 1
+            store.last_throttle = _now()
+            rate = 100 * sum(store.recent[-EMPTY_ALARM_WINDOW:]) / EMPTY_ALARM_WINDOW
+            stuck_s = _age_hours(store.throttled_since) * 3600
+            if stuck_s > THROTTLE_REST_SECONDS:
+                # Per-request backoff has not helped for a quarter of an
+                # hour. Stop entirely for a while: continuing to poke a host
+                # that is already refusing is how a soft throttle becomes a
+                # hard block, and the scheduled runs share this IP.
+                log.warning("Still throttled after %.0f min - resting %d min. "
+                            "%d window(s) waiting to be re-checked.",
+                            stuck_s / 60, THROTTLE_REST_SECONDS // 60,
+                            len(store.suspect))
+                sleep(THROTTLE_REST_SECONDS)
+                store.recent.clear()        # judge the next stretch afresh
+                store.throttled_since = ""
+                continue
+            log.warning("Empty rate %.0f%% over the last %d windows - looks "
+                        "throttled, not empty. Slowing down; %d window(s) "
+                        "queued for a re-check once it clears.",
+                        rate, EMPTY_ALARM_WINDOW, len(store.suspect))
+        elif store.throttled_since:
+            log.info("Empty rate back to normal after %.0f min; "
+                     "%d window(s) to re-check.",
+                     _age_hours(store.throttled_since) * 60, len(store.suspect))
+            store.throttled_since = ""
+
+        # Jitter every wait. A request every six seconds on a perfect clock
+        # is a fingerprint; nobody browses like a metronome.
+        nap = delay_s * (THROTTLE_BACKOFF if throttled else 1.0)
+        nap *= 1.0 + random.uniform(-JITTER_FRACTION, JITTER_FRACTION)
         if nap:
             sleep(nap)
     return done
