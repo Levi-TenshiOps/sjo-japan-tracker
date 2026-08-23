@@ -153,26 +153,50 @@ def chrome_path(override: str = "") -> str | None:
     return None
 
 
+DEFAULT_PROFILE = ".chrome-profile"
+
+
 def fetch_dom(
     url: str,
     *,
     chrome: str,
     timeout: int = 120,
     virtual_time_budget_ms: int = 25000,
+    profile_dir: str | None = DEFAULT_PROFILE,
 ) -> str:
     """Rendered DOM for `url`, or "" if Chrome could not produce one.
 
     `--virtual-time-budget` is what makes this work: without it the dump
     happens before Google's JavaScript has populated the results and the
     page is as empty as the plain HTTP fetch.
+
+    `--user-data-dir` matters just as much, for a different reason. Without
+    it Chrome starts from a blank profile every single time: no cookies, no
+    history, no session. A sweep of 4,000 windows then looks to Google like
+    four thousand brand-new browsers from one address, each running exactly
+    one flight search and never returning. That is a far louder bot signal
+    than the request rate, and no amount of slowing down fixes it - a
+    perfectly paced request from a browser that has never existed before is
+    still obviously not a person.
+
+    Reusing one profile keeps the cookies Google sets, so the requests read
+    as one browser coming back rather than thousands appearing once. Pass
+    `profile_dir=None` to opt out, which is only sensible in a test.
+
+    One profile cannot serve two Chromes at once - the second would find the
+    directory locked - which is fine, because `gate.google()` already
+    guarantees only one process queries Google at a time.
     """
     cmd = [
         chrome, "--headless=new", "--disable-gpu", "--no-sandbox",
         "--disable-dev-shm-usage", "--no-first-run", "--no-default-browser-check",
         "--disable-extensions", "--mute-audio",
         f"--virtual-time-budget={virtual_time_budget_ms}",
-        "--dump-dom", url,
     ]
+    if profile_dir:
+        Path(profile_dir).mkdir(parents=True, exist_ok=True)
+        cmd.append(f"--user-data-dir={Path(profile_dir).resolve()}")
+    cmd += ["--dump-dom", url]
     try:
         done = subprocess.run(cmd, capture_output=True, text=True,
                               encoding="utf-8", errors="replace", timeout=timeout)

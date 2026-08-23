@@ -611,3 +611,101 @@ class TestSweepRespectsTheLock:
                     fetch=FakeChrome(dom, fail_on={1}),
                     sleep=lambda _: None, delay_s=0, lock_path=str(lock))
         assert not lock.exists()
+
+
+class TestEscalatingRest:
+    """A fixed rest just cycles: rest, resume, get throttled, rest again.
+
+    Observed 2026-08-23 doing exactly that for forty minutes. Each rest that
+    fails to clear the throttle now doubles the next, to an hour.
+    """
+
+    def test_the_ladder_doubles_then_caps(self):
+        from tracker.sweeper import THROTTLE_REST_MAX, THROTTLE_REST_SECONDS
+        rests = [min(THROTTLE_REST_SECONDS * (2 ** n), THROTTLE_REST_MAX)
+                 for n in range(5)]
+        assert rests == [900, 1800, 3600, 3600, 3600]
+
+    def test_a_healthy_stretch_resets_the_ladder(self, dom):
+        """Otherwise one bad afternoon leaves it resting an hour forever."""
+        s = SweepStore(recent=[0] * 40, throttled_since="2026-08-23T14:00:00+00:00",
+                       consecutive_rests=3)
+        sweep_batch(windows(2), s, batch=1, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        assert s.consecutive_rests == 0
+        assert s.throttled_since == ""
+
+    def test_rests_are_counted(self):
+        s = SweepStore(recent=[1] * 40,
+                       throttled_since="2020-01-01T00:00:00+00:00")
+        sweep_batch(windows(3), s, batch=1, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        assert s.consecutive_rests >= 1
+
+
+class TestPersistentChromeProfile:
+    """A fresh profile per launch is a louder bot signal than the rate.
+
+    Without --user-data-dir, a 4,000-window sweep looks like four thousand
+    brand-new browsers from one address, each running one search and never
+    returning. No pacing fixes that.
+    """
+
+    def test_the_profile_flag_is_passed(self, tmp_path, monkeypatch):
+        import tracker.browser as browser
+        seen = {}
+
+        class FakeRun:
+            stdout = "<html></html>"
+
+        def fake_run(cmd, **kw):
+            seen["cmd"] = cmd
+            return FakeRun()
+
+        monkeypatch.setattr(browser.subprocess, "run", fake_run)
+        browser.fetch_dom("https://x", chrome="chrome.exe",
+                          profile_dir=str(tmp_path / "prof"))
+        assert any(a.startswith("--user-data-dir=") for a in seen["cmd"])
+
+    def test_the_profile_directory_is_created(self, tmp_path, monkeypatch):
+        import tracker.browser as browser
+
+        class FakeRun:
+            stdout = ""
+
+        monkeypatch.setattr(browser.subprocess, "run", lambda *a, **k: FakeRun())
+        prof = tmp_path / "prof"
+        browser.fetch_dom("https://x", chrome="chrome.exe", profile_dir=str(prof))
+        assert prof.exists()
+
+    def test_opting_out_sends_no_profile_flag(self, monkeypatch):
+        import tracker.browser as browser
+        seen = {}
+
+        class FakeRun:
+            stdout = ""
+
+        def fake_run(cmd, **kw):
+            seen["cmd"] = cmd
+            return FakeRun()
+
+        monkeypatch.setattr(browser.subprocess, "run", fake_run)
+        browser.fetch_dom("https://x", chrome="chrome.exe", profile_dir=None)
+        assert not any(a.startswith("--user-data-dir=") for a in seen["cmd"])
+
+    def test_the_url_stays_last(self, monkeypatch):
+        """Chrome takes the URL positionally; a flag after it is ignored."""
+        import tracker.browser as browser
+        seen = {}
+
+        class FakeRun:
+            stdout = ""
+
+        def fake_run(cmd, **kw):
+            seen["cmd"] = cmd
+            return FakeRun()
+
+        monkeypatch.setattr(browser.subprocess, "run", fake_run)
+        browser.fetch_dom("https://example.com/q", chrome="chrome.exe",
+                          profile_dir=None)
+        assert seen["cmd"][-1] == "https://example.com/q"

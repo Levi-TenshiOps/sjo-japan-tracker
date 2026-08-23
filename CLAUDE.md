@@ -43,6 +43,34 @@ remains is live verification, not a rewrite.
    parameters only; `preferences.json` and `.env` are gitignored. The
    repository must stay publishable as-is.
 
+## What makes Google block you, in order of importance
+
+Learned the hard way on 2026-08-23, after roughly an hour of hard
+throttling that a fifteen-minute rest could not clear.
+
+**1. A fresh browser profile every launch.** This is the big one and it is
+not about speed. Without `--user-data-dir`, Chrome starts blank each time:
+no cookies, no history, no session. A 4,000-window sweep then looks like
+four thousand brand-new browsers from one address, each running exactly one
+flight search and never coming back. No amount of pacing repairs that - a
+perfectly timed request from a browser that has never existed before is
+still obviously not a person. `browser.fetch_dom` now reuses
+`.chrome-profile`, so the cookies Google sets persist and the traffic reads
+as one browser returning.
+
+**2. Two processes at once.** Doubling the rate took the hit rate from 87%
+to 24% in minutes. Enforced by `gate.py`; see the section below.
+
+**3. Rate.** It matters, but less than the two above. At a 10s delay the
+sweep is ~360 requests/hour, and it ran cleanly at 87% for hours at 6s.
+
+**Do not diagnose a throttle by making more requests.** That was the
+mistake that turned a short throttle into an hour of one: each diagnostic
+probe was itself another request to a host already refusing. When the
+health line says throttled, the only useful action is to stop entirely and
+wait. `sweep_forever.py` now escalates its rests - 15 minutes, then 30,
+then an hour - because a fixed rest simply cycles.
+
 ## Never query Google from two places at once
 
 This is enforced by `tracker/gate.py`, not left to discipline, and the

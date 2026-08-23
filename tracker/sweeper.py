@@ -159,6 +159,7 @@ class SweepStore:
     # here until they can be re-checked during a healthy stretch.
     suspect: list = field(default_factory=list)
     throttle_events: int = 0
+    consecutive_rests: int = 0
     throttled_since: str = ""
     last_throttle: str = ""
 
@@ -292,6 +293,10 @@ EMPTY_ALARM_RATE = 0.60        # above this, assume throttling rather than truth
 THROTTLE_BACKOFF = 4.0         # multiply the delay while it looks throttled
 SUSPECT_FAST_SECONDS = 4.5     # a genuine page has never come back this fast
 THROTTLE_REST_SECONDS = 900    # full stop after this looks sustained
+# Each rest that fails to clear it doubles the next one, up to an hour. A
+# fixed 15 minutes just cycles: rest, resume, get throttled again, rest.
+# Observed 2026-08-23 doing exactly that for forty minutes.
+THROTTLE_REST_MAX = 3600
 JITTER_FRACTION = 0.25         # +/- this much on every delay
 
 
@@ -455,16 +460,19 @@ def sweep_batch(
             store.last_throttle = _now()
             rate = 100 * sum(store.recent[-EMPTY_ALARM_WINDOW:]) / EMPTY_ALARM_WINDOW
             stuck_s = _age_hours(store.throttled_since) * 3600
+            rest_for = min(THROTTLE_REST_SECONDS * (2 ** store.consecutive_rests),
+                           THROTTLE_REST_MAX)
             if stuck_s > THROTTLE_REST_SECONDS:
                 # Per-request backoff has not helped for a quarter of an
                 # hour. Stop entirely for a while: continuing to poke a host
                 # that is already refusing is how a soft throttle becomes a
                 # hard block, and the scheduled runs share this IP.
-                log.warning("Still throttled after %.0f min - resting %d min. "
-                            "%d window(s) waiting to be re-checked.",
-                            stuck_s / 60, THROTTLE_REST_SECONDS // 60,
-                            len(store.suspect))
-                sleep(THROTTLE_REST_SECONDS)
+                store.consecutive_rests += 1
+                log.warning("Still throttled after %.0f min - resting %.0f min "
+                            "(rest #%d). %d window(s) waiting to be re-checked.",
+                            stuck_s / 60, rest_for / 60,
+                            store.consecutive_rests, len(store.suspect))
+                sleep(rest_for)
                 store.recent.clear()        # judge the next stretch afresh
                 store.throttled_since = ""
                 continue
@@ -477,6 +485,7 @@ def sweep_batch(
                      "%d window(s) to re-check.",
                      _age_hours(store.throttled_since) * 60, len(store.suspect))
             store.throttled_since = ""
+            store.consecutive_rests = 0
 
         # Jitter every wait. A request every six seconds on a perfect clock
         # is a fingerprint; nobody browses like a metronome.
