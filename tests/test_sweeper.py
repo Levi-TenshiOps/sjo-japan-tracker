@@ -709,3 +709,92 @@ class TestPersistentChromeProfile:
         browser.fetch_dom("https://example.com/q", chrome="chrome.exe",
                           profile_dir=None)
         assert seen["cmd"][-1] == "https://example.com/q"
+
+
+class TestHotAndColdTiering:
+    """Most windows can never produce an alert; spend the budget accordingly.
+
+    Measured 2026-08-23 over 400 priced windows: 1% at or under the $1,400
+    alert threshold, 4% at or under $1,600, all of them in January and
+    February. Treating all 4,014 equally spent ~96% of the requests on dates
+    that cannot matter - and that spend is what got the address throttled.
+    """
+
+    def _stocked(self, ws):
+        s = SweepStore()
+        for n, w in enumerate(ws):
+            s.record(opt(1300 + n * 400, depart=w.depart, ret=w.back))
+        return s
+
+    def test_no_history_means_everything_is_cold(self):
+        from tracker.sweeper import hot_keys
+        assert hot_keys(SweepStore()) == []
+
+    def test_hot_is_anchored_on_the_best_seen(self):
+        """Relative to the cheapest fare, so it survives the market moving."""
+        from tracker.sweeper import hot_keys
+        ws = windows(4)
+        s = self._stocked(ws)          # 1300, 1700, 2100, 2500
+        # 1300 * 1.3 = 1690, so 1700 misses by ten dollars.
+        assert len(hot_keys(s, multiple=1.3)) == 1
+        # 1300 * 1.4 = 1820, which takes in 1700 but not 2100.
+        assert len(hot_keys(s, multiple=1.4)) == 2
+
+    def test_the_threshold_widens_the_net(self):
+        """A fare under the alert price is hot even if the best is far below."""
+        from tracker.sweeper import hot_keys
+        ws = windows(4)
+        s = self._stocked(ws)
+        assert len(hot_keys(s, multiple=1.0, threshold=2200)) == 3
+
+    def test_hot_is_ordered_cheapest_first(self):
+        from tracker.sweeper import hot_keys
+        s = self._stocked(windows(4))
+        prices = [s.found[k]["price_usd"] for k in hot_keys(s, threshold=9999)]
+        assert prices == sorted(prices)
+
+    def test_an_unpriced_window_is_always_taken(self):
+        """It might be the cheapest there is; skipping it would blind us."""
+        from tracker.sweeper import next_window
+        ws = windows(5)
+        s = self._stocked(ws[:2])
+        s.cursor = 4                     # points at an unpriced window
+        w, was_hot = next_window(ws, s)
+        assert w.key == ws[4].key and not was_hot
+
+    def test_the_cold_rotation_still_advances(self, dom):
+        """Only chasing cheap windows would never find a new bargain."""
+        ws = windows(12)
+        s = self._stocked(ws)
+        s.cursor = 0
+        before = s.cursor
+        sweep_batch(ws, s, batch=8, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        assert s.cursor > before, "coverage must keep moving"
+
+    def test_hot_windows_do_not_consume_the_cold_cursor(self, dom):
+        from tracker.sweeper import next_window
+        ws = windows(12)
+        s = self._stocked(ws)
+        s.cursor = 3
+        s.windows_priced = 0             # forces a hot pick on the interleave
+        w, was_hot = next_window(ws, s, hot_share=0.5)
+        if was_hot:
+            assert w.key != ws[3].key or len(ws) == 1
+
+    def test_the_hot_set_is_rotated_not_repeated(self):
+        """Always taking the cheapest would leave the rest of it stale."""
+        from tracker.sweeper import next_window
+        ws = windows(8)
+        s = self._stocked(ws)
+        picked = set()
+        for n in range(0, 40, 4):
+            s.windows_priced = n
+            w, was_hot = next_window(ws, s, threshold=9999, hot_share=0.25)
+            if was_hot:
+                picked.add(w.key)
+        assert len(picked) > 1, "the whole hot set should come round"
+
+    def test_empty_window_list_is_handled(self):
+        from tracker.sweeper import next_window
+        assert next_window([], SweepStore()) == (None, False)

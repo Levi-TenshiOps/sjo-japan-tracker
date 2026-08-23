@@ -62,8 +62,10 @@ def build_args() -> argparse.Namespace:
     p.add_argument("-c", "--config", default=config_mod.DEFAULT_CONFIG_PATH)
     p.add_argument("-p", "--preferences", default="preferences.json")
     p.add_argument("--store", default=DEFAULT_STORE)
-    p.add_argument("--delay", type=float, default=8.0,
-                   help="seconds between launches (default 8)")
+    p.add_argument("--delay", type=float, default=90.0,
+                   help="seconds between launches (default 90). At 90s
+the sweep makes ~900 requests a day; the 6s it used before
+made ~5,800, which is what got the address throttled.")
     p.add_argument("--batch", type=int, default=10,
                    help="windows priced before each save (default 10)")
     p.add_argument("--once", action="store_true", help="one batch, then exit")
@@ -136,6 +138,7 @@ def main() -> int:
                 budget_ms=cfg.chrome_budget_ms, delay_s=args.delay,
                 on_find=announce, history_csv=cfg.sweep_history_csv,
                 lock_path=cfg.google_lock,
+                hot_threshold=prefs.good_price_usd,
             )
         except Exception as exc:            # noqa: BLE001 - must not die
             log.warning("batch failed (%s); pausing 60s", exc)

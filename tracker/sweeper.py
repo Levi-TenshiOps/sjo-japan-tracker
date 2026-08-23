@@ -262,6 +262,78 @@ class SweepStore:
                 f"{len(self.found)} window(s) remembered")
 
 
+# How the sweep divides its launches once it knows anything. Measured
+# 2026-08-23 over 400 priced windows: 1% were at or under the $1,400 alert
+# threshold, 4% at or under $1,600, and every one of those sat in January or
+# February. Sweeping all 4,014 windows at equal priority spends ~96% of the
+# budget on dates that will never produce an alert - and that budget is
+# exactly what got the address throttled.
+#
+# So: most launches go to windows already known to be cheap, or never
+# priced at all; the rest continue the cold rotation so coverage still
+# completes. Both halves matter. Only chasing the cheap ones would never
+# notice a new bargain appearing somewhere cold.
+# One launch in four goes to a window already known to be cheap; the rest
+# continue the cold rotation. Measured 2026-08-23 over 400 priced windows,
+# 1% were at or under the $1,400 alert threshold and 4% at or under $1,600,
+# every one of them in January or February. Treating all 4,014 windows
+# equally spends ~96% of the budget on dates that cannot produce an alert,
+# and that budget is what got the address throttled.
+#
+# A quarter, not more. There are only ~40 hot windows: at a higher share
+# they would be re-priced several times an hour, which buys nothing and
+# costs coverage everywhere else. Both halves are needed - chasing only the
+# cheap ones would never notice a bargain appearing somewhere cold.
+HOT_SHARE = 0.25
+HOT_PRICE_MULTIPLE = 1.3       # "cheap" means within this of the best seen
+
+
+def hot_keys(store: "SweepStore", *, threshold: int | None = None,
+             multiple: float = HOT_PRICE_MULTIPLE) -> list[str]:
+    """Windows worth re-pricing often, cheapest first.
+
+    Anchored on the cheapest fare actually seen rather than a fixed number,
+    so it keeps working when the market moves. `threshold` widens the net to
+    anything under the alert price even when the best seen is far below it.
+    """
+    priced = [(v.get("price_usd", 10 ** 9), k) for k, v in store.found.items()]
+    if not priced:
+        return []
+    best = min(p for p, _ in priced)
+    ceiling = best * multiple
+    if threshold is not None:
+        ceiling = max(ceiling, float(threshold))
+    return [k for p, k in sorted(priced) if p <= ceiling]
+
+
+def next_window(windows: Sequence, store: "SweepStore", *,
+                threshold: int | None = None, hot_share: float = HOT_SHARE):
+    """The next window to price: (window, was_hot).
+
+    A window never priced counts as cold and is always taken when the cold
+    cursor reaches it - an unpriced window might be the cheapest there is,
+    and skipping it would leave whole regions permanently invisible.
+    """
+    if not windows:
+        return None, False
+    cold = windows[store.cursor % len(windows)]
+
+    hot = [k for k in hot_keys(store, threshold=threshold)]
+    if not hot or cold.key not in store.found:
+        return cold, False          # nothing known yet, or this one is new
+
+    # Deterministic interleave: every Nth launch is a hot one. Rotating
+    # through the hot list rather than always taking the cheapest keeps the
+    # whole hot set fresh instead of one window.
+    every = max(int(round(1 / max(hot_share, 0.01))), 2)
+    if store.windows_priced % every == 0:
+        by_key = {w.key: w for w in windows}
+        picks = [by_key[k] for k in hot if k in by_key]
+        if picks:
+            return picks[(store.windows_priced // every) % len(picks)], True
+    return cold, False
+
+
 def sweep_order(windows: Sequence) -> list:
     """Windows in the order the sweep should walk them.
 
@@ -349,6 +421,8 @@ def sweep_batch(
     history_csv: str | None = None,
     lock_path: str = gate.DEFAULT_LOCK,
     lock_timeout: float = 300.0,
+    hot_threshold: int | None = None,
+    hot_share: float = HOT_SHARE,
 ) -> int:
     """Price the next `batch` windows, advancing and wrapping the cursor.
 
@@ -394,8 +468,13 @@ def sweep_batch(
                 continue            # window expired out of the rolling span
             replay = True
         else:
-            w = windows[store.cursor]
-            replay = False
+            # Hot windows are re-priced out of turn and must not consume the
+            # cold cursor, or coverage would stall on the cheap ones.
+            w, was_hot = next_window(windows, store, threshold=hot_threshold,
+                                     hot_share=hot_share)
+            if w is None:
+                break
+            replay = was_hot
 
         depart, ret = w.depart, w.back
         url = _search_url(origin, destination, depart, ret, max_stops)

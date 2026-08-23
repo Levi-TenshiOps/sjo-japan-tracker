@@ -43,6 +43,33 @@ remains is live verification, not a rewrite.
    parameters only; `preferences.json` and `.env` are gitignored. The
    repository must stay publishable as-is.
 
+## The sweep is tiered, because most windows can never matter
+
+Measured 2026-08-23 across 400 priced windows:
+
+    at or under $1,400 (the alert threshold)     5 windows   1%
+    at or under $1,600                          15 windows   4%
+    at or under $2,000                         186 windows  46%
+
+and every one of the fifteen sat in January or February. Sweeping all 4,014
+windows at equal priority therefore spent about 96% of its requests on
+dates that cannot produce an alert - roughly 5,800 requests a day to one
+address, which is what got it throttled.
+
+One launch in four now goes to a window already known to be cheap (within
+1.3x of the best fare seen, or under the alert threshold); the rest
+continue the cold rotation. At the default 90-second delay that is ~900
+requests a day: each hot window re-priced every ~4 hours, and a full sweep
+of everything else every ~6 days. Both better and six times lighter than
+what came before.
+
+A quarter, not more. There are only ~40 hot windows; a larger share would
+re-price them several times an hour, buying nothing and costing coverage
+everywhere else. And the cold half is not optional - chasing only known
+bargains would never notice a new one appearing somewhere cold. A window
+that has never been priced is always taken when the cursor reaches it, for
+the same reason.
+
 ## What makes Google block you, in order of importance
 
 Learned the hard way on 2026-08-23, after roughly an hour of hard
