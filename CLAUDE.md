@@ -790,6 +790,31 @@ the metro-code, max-stops, max-stay and OSA questions are all settled above.
       the highlight mean something. This file previously said $2,600/$2,200
       was still live; that was stale.
 - [ ] Add `plan_open_jaw()` once real dates are set (Tokyo in, Seoul out)
+- [ ] **Test ITA Matrix, once the sweep has had one clean day at 90s.**
+      Agreed with the trip owner 2026-08-23; they asked to be reminded.
+      Two things to check, in order:
+
+      1. *Calendar search.* Matrix takes a start date plus a stay-length
+         range (21-38n) and returns a month of cheapest-per-day fares in
+         one request - its internal API has a `SearchType` flag for
+         monthly/calendar searches. If that holds it breaks the hardest
+         limit in this file ("One request buys exactly one (depart, return)
+         window ... there is no clever query that prices a month at once")
+         and replaces ~540 requests with one.
+      2. *Routing codes.* Matrix can **exclude** connecting cities before
+         the search runs. Today ~70% of every Chrome result is discarded by
+         the visa filter, because Google Flights offers an include-*hint*
+         and no exclude at all. That is the only reason this is not already
+         built.
+
+      Do not start while the IP is recovering: matrix.itasoftware.com is
+      Google-owned and shares the address that was throttled all of
+      2026-08-23. Verify against windows whose answer is already known -
+      $1,347 on 2027-01-29 +27n, $1,432 on 2026-11-30 +29n. If it agrees,
+      add it as a fourth *discovery* layer beside the wide net and keep
+      Chrome as the verifier: Matrix does not sell tickets and its
+      interface is undocumented. Wrap every request in
+      `gate.google("matrix")`, like every other path to Google.
 
 ## Deployment
 
