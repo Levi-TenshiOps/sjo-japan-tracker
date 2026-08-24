@@ -1606,3 +1606,64 @@ class TestNoInjectedCallbackCanStopTheSweep:
         sweep_batch(windows(4), s, batch=4, fetch=FakeChrome(dom),
                     sleep=lambda _: None, delay_s=0, on_find=seen.append)
         assert seen, "the guard must not swallow the call itself"
+
+
+class TestTheInvariantIsHonestAboutWhatItKnows:
+    """"Orphan" needs a definition that survives prune and a new ledger.
+
+    The final review on 2026-08-24 reported 51 orphans where the morning had
+    reported 0, and neither number was wrong - the definition was. Of the 51:
+
+    * 21 had been checked and *had* produced fares, then fell out of `found`
+      when `prune` kept only the cheapest 400. Correctly handled; the fare
+      was logged to sweep_history, it is simply not worth remembering.
+    * 30 were walked before the `checked` ledger existed at all, so there is
+      no record either way.
+
+    A window with no record predating the ledger is unknown, not lost. The
+    distinction matters, because calling it lost hides the one case that
+    really is: a queued key popped without ever being priced.
+    """
+
+    def test_a_pruned_window_is_not_lost(self, dom):
+        """It was checked and it produced a fare. Not remembering a dear
+        fare is the store working, not a coverage hole."""
+        s = SweepStore()
+        ws = windows(3)
+        sweep_batch(ws, s, batch=3, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        assert s.found
+        s.prune(max_entries=0)          # drop everything
+        assert not s.found
+        for w in ws[:s.cursor]:
+            assert w.key in s.checked, (
+                "the check record must outlive the finding it produced")
+
+    def test_a_dropped_recheck_is_counted_not_silent(self):
+        """The only way a queued window leaves without being priced."""
+        s = SweepStore()
+        ws = windows(4)
+        s.suspect = ["1999-01-01_1999-02-01"]      # not a live window
+        s.recent = [0] * 40                        # healthy, so re-checks run
+        sweep_batch(ws, s, batch=8, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        assert s.dropped_rechecks >= 1
+        assert "1999-01-01_1999-02-01" not in s.suspect
+
+    def test_a_live_key_is_never_dropped(self, dom):
+        s = SweepStore()
+        ws = windows(4)
+        s.suspect = [ws[2].key]
+        s.recent = [0] * 40
+        sweep_batch(ws, s, batch=8, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        assert s.dropped_rechecks == 0
+        assert ws[2].key in s.checked, "it was queued, so it must be checked"
+
+    def test_every_priced_window_gets_a_record(self, dom):
+        """What makes the invariant exact once the ledger has a full pass."""
+        s = SweepStore()
+        ws = windows(10)
+        sweep_batch(ws, s, batch=10, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        assert len(s.checked) == s.windows_priced

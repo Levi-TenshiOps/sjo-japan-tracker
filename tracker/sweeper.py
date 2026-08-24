@@ -168,6 +168,10 @@ class SweepStore:
     # are ways a fare can be missed on a window we *did* check.
     shortfalls: int = 0
     unreadable: int = 0
+    # Re-check keys discarded because the window had rolled out of
+    # the search span. The only way a queued window leaves without
+    # being priced, so it is counted rather than silent.
+    dropped_rechecks: int = 0
     # Of the shortfall windows, how many had Google's rows in
     # ascending price order. If they always are, the rows behind the
     # un-clickable control are the dearest and a shortfall is
@@ -812,7 +816,16 @@ def sweep_batch(
             key = store.suspect.pop(0)
             w = next((x for x in windows if x.key == key), None)
             if w is None:
-                continue            # window expired out of the rolling span
+                # It really has rolled out of the search window - min_lead_days
+                # moves the front edge forward every day - so dropping it is
+                # right. Say so, because the alternative reading of a
+                # shrinking queue is that the re-checks are happening, and
+                # this is the one place a queued window can leave without
+                # ever being priced.
+                log.debug("re-check key %s is no longer a live window; "
+                          "dropping it", key)
+                store.dropped_rechecks += 1
+                continue
             replay = True
         else:
             # Hot windows are re-priced out of turn and must not consume the
