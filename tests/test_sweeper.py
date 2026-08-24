@@ -5,6 +5,7 @@ No browser is launched and no network is touched - `fetch` is injected.
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import collections
 import io
 import json
 from datetime import date, datetime, timedelta, timezone
@@ -1245,3 +1246,147 @@ class TestNoWindowIsQuietlyWrittenOff:
         sweep_batch(windows(1), s, batch=1, fetch=FakeChrome(dom),
                     sleep=lambda _: None, delay_s=0)
         assert len(s.checked) <= sweeper.MAX_CHECKED
+
+
+class TestEveryWindowIsAccountedFor:
+    """The invariant the trip owner actually asked for.
+
+    "Never leave a possible cheap flight untracked." Every window must be in
+    exactly one of four states:
+
+        1. beyond the cursor - not walked yet
+        2. has a fare recorded in `found`
+        3. checked on a healthy connection and genuinely empty
+        4. queued for a re-check
+
+    A window in none of them has been silently written off. That was the
+    state of 1,440 windows on 2026-08-23 - ~960 of them in January and
+    February - because an empty answer left no trace to reason about.
+    """
+
+    def _audit(self, ws, s):
+        """(buckets, orphans) - orphans must always be empty."""
+        queued = set(s.suspect)
+        buckets = collections.Counter()
+        orphans = []
+        for i, w in enumerate(ws):
+            if i >= s.cursor:
+                buckets["future"] += 1
+            elif w.key in s.found:
+                buckets["found"] += 1
+            elif w.key in queued:
+                buckets["queued"] += 1
+            elif s.checked.get(w.key, {}).get("healthy"):
+                buckets["verified empty"] += 1
+            else:
+                orphans.append(w.key)
+        return buckets, orphans
+
+    def test_a_clean_sweep_leaves_nothing_unaccounted(self, dom):
+        ws = windows(12)
+        s = SweepStore()
+        sweep_batch(ws, s, batch=12, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        _, orphans = self._audit(ws, s)
+        assert orphans == []
+
+    def test_an_all_empty_sweep_leaves_nothing_unaccounted(self, dom):
+        """Empties are the dangerous case: they used to vanish."""
+        ws = windows(12)
+        s = SweepStore()
+        sweep_batch(ws, s, batch=12, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        _, orphans = self._audit(ws, s)
+        assert orphans == [], f"{len(orphans)} windows written off silently"
+
+    def test_a_throttled_sweep_leaves_nothing_unaccounted(self, dom):
+        """The real scenario: a long run of empties, then recovery.
+
+        This is what happened on 2026-08-23 and what silently lost ~960
+        January and February windows.
+        """
+        ws = windows(60)
+        s = SweepStore()
+        # A throttle: everything empty for a long stretch.
+        for _ in range(3):
+            sweep_batch(ws, s, batch=20, fetch=FakeChrome(""),
+                        sleep=lambda _: None, delay_s=0)
+        buckets, orphans = self._audit(ws, s)
+        assert orphans == [], (
+            f"{len(orphans)} of {len(ws)} windows silently written off after "
+            f"a throttle; buckets={dict(buckets)}")
+
+    def test_recovery_puts_the_throttled_ones_back_in_line(self, dom):
+        ws = windows(40)
+        s = SweepStore()
+        sweep_batch(ws, s, batch=40, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        before = len(s.suspect)
+        added = sweeper.queue_unverified(ws, s)
+        assert added + before > 0, "nothing was queued after an all-empty pass"
+        _, orphans = self._audit(ws, s)
+        assert orphans == []
+
+    def test_a_window_with_a_fare_is_never_queued(self, dom):
+        """Re-checking a window we already priced would be wasted budget."""
+        ws = windows(6)
+        s = SweepStore()
+        sweep_batch(ws, s, batch=6, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        sweeper.queue_unverified(ws, s)
+        assert not (set(s.suspect) & set(s.found))
+
+    def test_windows_past_the_cursor_are_never_queued(self):
+        """They are not missing; they simply have not been reached."""
+        ws = windows(20)
+        s = SweepStore(cursor=5)
+        sweeper.queue_unverified(ws, s)
+        assert all(k in {w.key for w in ws[:5]} for k in s.suspect)
+
+
+class TestTheBlindSpotAfterAThrottleRest:
+    """The exact shape of the 2026-08-23 loss.
+
+    Each throttle rest calls `store.recent.clear()` so the next stretch is
+    judged fresh. That is deliberate - but it means `looks_throttled` reads
+    False for the following 20 windows, so empties arriving in that gap were
+    never flagged suspect. Most of that day fell into those gaps, and ~960
+    January and February windows were written off as "no fares" while Google
+    was in fact refusing to answer.
+
+    The `checked` ledger closes it: a window is only trusted as empty when
+    the check behind it was healthy, and a blind-spot check is not.
+    """
+
+    def test_blind_spot_empties_are_not_trusted(self, dom):
+        ws = windows(30)
+        s = SweepStore()
+        # Simulate the gap directly: recent cleared, so nothing "looks"
+        # throttled, and a run of empties goes straight through.
+        s.recent.clear()
+        sweep_batch(ws, s, batch=10, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        trusted = [k for k, v in s.checked.items()
+                   if v["empty"] and v["healthy"]]
+        assert trusted == [], (
+            "an empty answer was recorded as trustworthy while the sweep "
+            "could not tell whether the connection was healthy")
+
+    def test_they_are_recoverable_afterwards(self, dom):
+        ws = windows(30)
+        s = SweepStore()
+        s.recent.clear()
+        sweep_batch(ws, s, batch=10, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        assert sweeper.unverified_windows(ws, s), (
+            "the blind-spot windows must still be findable for a re-check")
+
+    def test_a_healthy_empty_is_trusted_and_not_re_queued(self):
+        """Precision: without this the sweep would re-check everything for
+        ever and never make forward progress."""
+        ws = windows(3)
+        s = SweepStore(cursor=3)
+        s.checked = {w.key: {"at": "2026-08-24T06:00:00+00:00",
+                             "empty": True, "healthy": True} for w in ws}
+        assert sweeper.unverified_windows(ws, s) == []
+        assert sweeper.queue_unverified(ws, s) == 0

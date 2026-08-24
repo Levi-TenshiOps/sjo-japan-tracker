@@ -370,6 +370,49 @@ one extra concurrent request, and the throttle detection catches the
 latter. Stale locks - dead PID, or no heartbeat for ten minutes - are
 broken rather than waited out.
 
+## An empty answer is evidence of nothing unless you record the weather
+
+The trip owner's rule: **never leave a possible cheap flight untracked.**
+The sweep could not honour it, because it kept no evidence.
+
+A window that returned nothing wrote nothing - not to `sweep_history.csv`,
+which only logs fares, and not to `found`, which only holds windows that
+produced one. So afterwards a genuine "no flights on this date" and a
+throttled "Google refused to answer" left the identical trace: none. That
+is the one question worth asking once a throttle clears, and it could not
+be asked.
+
+Measured 2026-08-24 against the live store: **1,440 of 1,673 walked windows
+had no fare recorded**, ~960 of them in January and February - the months
+holding every cheap fare found so far - and **none were queued for a second
+look**.
+
+`suspect` was meant to catch exactly this, and has a blind spot. Every
+throttle rest calls `store.recent.clear()` so the next stretch is judged
+fresh; that is deliberate, but it means `looks_throttled` reads False for
+the following 20 windows and empties in that gap are never flagged. Most of
+2026-08-23 fell into those gaps.
+
+So `store.checked` now stamps **every** check - when, whether it was empty,
+and whether the connection was trustworthy at the time. That last field is
+the one that was missing. `unverified_windows` reads it back and
+`sweep_forever.py --recheck-unverified` puts them in line.
+
+The drain is one launch in four (`RECHECK_EVERY`). Taking every launch
+would clear a 1,268-window backlog by stalling the cold rotation for a day
+and a half, which trades one blind spot for another.
+
+**The invariant to keep.** Every window is in exactly one of four states:
+
+    1. beyond the cursor       - not walked yet
+    2. has a fare in `found`
+    3. checked while healthy   - genuinely empty, trusted
+    4. queued for a re-check
+
+A window in none of them has been silently written off.
+`TestEveryWindowIsAccountedFor` asserts it after clean, all-empty and
+throttled sweeps, and the same audit run against the live store reports 0.
+
 ## The cheap fares run on a flight schedule, and we were ignoring it
 
 The single most useful thing measured so far. 1,165 observations,
