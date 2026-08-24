@@ -44,8 +44,8 @@ from tracker.browser import chrome_path           # noqa: E402
 from tracker.preferences import Preferences, PreferencesError  # noqa: E402
 from tracker.schedule import generate_windows     # noqa: E402
 from tracker.sweeper import (                     # noqa: E402
-    DEFAULT_STORE, RECHECK_EVERY, Discovery, SweepStore, queue_unverified,
-    sweep_batch, sweep_order, unverified_windows,
+    DEFAULT_STORE, RECHECK_EVERY, Discovery, SweepStore, coverage_report,
+    queue_unverified, sweep_batch, sweep_order, unverified_windows,
 )
 
 log = logging.getLogger("sweep")
@@ -73,6 +73,9 @@ def build_args() -> argparse.Namespace:
     p.add_argument("--recheck-unverified", action="store_true",
                    help="queue every walked window that produced no fare and "
                         "was not checked on a healthy connection, then exit")
+    p.add_argument("--coverage", action="store_true",
+                   help="how often each kind of window is revisited, and what "
+                        "length of price drop that catches")
     p.add_argument("--status", action="store_true",
                    help="print progress and findings, then exit")
     p.add_argument("--log", default="sweep.log",
@@ -133,6 +136,13 @@ def main() -> int:
         print(f"At one re-check every {RECHECK_EVERY} launches, that is "
               f"~{len(store.suspect) * cycle / 86400:.1f} days of work "
               f"alongside the normal rotation.")
+        return 0
+
+    if args.coverage:
+        for line in coverage_report(windows, store,
+                                    threshold=prefs.good_price_usd,
+                                    delay_s=args.delay):
+            print(line)
         return 0
 
     if args.status:

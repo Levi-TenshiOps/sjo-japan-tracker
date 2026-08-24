@@ -411,6 +411,48 @@ WARM_SHARE = 0.25          # keeps the ~220 plausible windows fresh daily
 WARM_PAIR_MULTIPLE = 1.15  # a pair qualifies on a fare within this of target
 
 
+def coverage_report(windows: Sequence, store: "SweepStore", *,
+                    threshold: int | None, delay_s: float = 90.0) -> list[str]:
+    """How often each kind of window is revisited, and what that catches.
+
+    The question this answers is the trip owner's: "a cheap price that lasts
+    a day or two - do we get it?" For a fare that persists D days on a
+    window revisited every R days, the chance of seeing it is ~min(1, D/R).
+    So the guarantee is not about the search space, it is about R, and R is
+    different for each tier.
+    """
+    cycle = delay_s + LAUNCH_SECONDS
+    per_day = 86400 / cycle
+    hot = set(hot_keys(store, threshold=threshold))
+    pairs = promising_weekday_pairs(store, threshold=threshold)
+    warm = {w.key for w in windows
+            if (w.depart.weekday(), w.back.weekday()) in pairs}
+    hs = needed_hot_share(len(hot), cycle_s=cycle)
+    rs = (1.0 / RECHECK_EVERY) if store.suspect else 0.0
+    cs = max(0.0, 1.0 - hs - WARM_SHARE - rs)
+
+    rows = [f"{per_day:.0f} launches/day at {delay_s:.0f}s",
+            "",
+            f"{'tier':<24}{'windows':>9}{'share':>7}{'revisit':>11}"]
+    for name, n, share in (("hot (known cheap)", len(hot), hs),
+                           ("warm (plausible dates)", len(warm), WARM_SHARE),
+                           ("re-check backlog", len(store.suspect), rs),
+                           ("cold (all windows)", len(windows), cs)):
+        if n == 0 or share <= 0:
+            rows.append(f"{name:<24}{n:>9}{share*100:>6.0f}%{'-':>11}")
+            continue
+        rows.append(f"{name:<24}{n:>9}{share*100:>6.0f}%"
+                    f"{n/(per_day*share):>9.1f} d")
+
+    warm_r = len(warm) / (per_day * WARM_SHARE) if warm else float("inf")
+    cold_r = len(windows) / (per_day * cs) if cs > 0 else float("inf")
+    rows += ["", "a fare that lasts this long is caught:"]
+    for d in (1, 2, 3, 7):
+        rows.append(f"   {d} day(s): {min(1, d/warm_r)*100:>4.0f}% on a "
+                    f"plausible date, {min(1, d/cold_r)*100:>4.0f}% elsewhere")
+    return rows
+
+
 def unverified_windows(windows: Sequence, store: "SweepStore") -> list[str]:
     """Windows walked this pass that we cannot honestly call empty.
 
@@ -561,9 +603,18 @@ THROTTLE_REST_SECONDS = 900    # full stop after this looks sustained
 # Observed 2026-08-23 doing exactly that for forty minutes.
 THROTTLE_REST_MAX = 3600
 JITTER_FRACTION = 0.25         # +/- this much on every delay
-# One launch in four goes to the re-check backlog, so recovering from a
-# throttle cannot starve the cold rotation.
-RECHECK_EVERY = 4
+# The re-check backlog gets one launch in eight, not one in four.
+#
+# It competes directly with the cold rotation, and the two do the same job:
+# every queued window sits behind the cursor, so the pass would re-price it
+# anyway. Measured 2026-08-24 with a 1,256-window backlog, a quarter of the
+# launches pushed a full cold pass from 4.9 days out to 8.2 - and the
+# backlog is mostly January and February dates that have *never* produced a
+# cheap fare, while October to December were still unexplored.
+#
+# An eighth keeps the priority months front-loaded, which is worth
+# something, without paying for it in the frontier.
+RECHECK_EVERY = 8
 # Bound on the per-window check ledger. Older entries fall off; they
 # describe a check too old to be worth trusting anyway.
 MAX_CHECKED = 6000
@@ -779,6 +830,14 @@ def sweep_batch(
         # afterwards, and there was no way to ask "which windows were checked
         # while the connection was bad?" - which is exactly the question that
         # matters after a throttle. Every check is now stamped.
+        # Whoever priced it, it no longer needs re-checking. Without this
+        # the cold pass and the re-check queue both visit the same window:
+        # measured 2026-08-24, all 1,256 queued windows sat behind the
+        # cursor, so every one of them was going to be re-priced by the pass
+        # regardless.
+        if w.key in store.suspect:
+            store.suspect.remove(w.key)
+
         store.checked[w.key] = {
             "at": _now(),
             "empty": not options,

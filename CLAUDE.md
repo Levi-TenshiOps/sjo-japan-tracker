@@ -393,6 +393,48 @@ about four minutes, six times a day - roughly 18 windows out of ~900. Taking
 and releasing per launch would recover that and add a lot of lock churn for
 a rounding error.
 
+## Will we catch a price drop that lasts a day or two?
+
+The trip owner's question, and the right one. For a fare that persists D
+days on a window revisited every R days, the chance of seeing it is roughly
+`min(1, D/R)`. So the guarantee has nothing to do with the size of the
+search space and everything to do with R - which differs per tier.
+`sweep_forever.py --coverage` prints it:
+
+    tier                      windows  share    revisit
+    hot (known cheap)              48    13%      0.4 d
+    warm (plausible dates)        263    25%      1.2 d
+    re-check backlog             1256    12%     11.2 d
+    cold (all windows)           2745    50%      6.1 d
+
+    a fare that lasts this long is caught:
+       1 day(s):   85% on a plausible date,   16% elsewhere
+       2 day(s):  100% on a plausible date,   33% elsewhere
+
+**So: yes for the dates that matter, no for the rest.** A two-day price
+drop on a Monday/Wednesday/Friday departure with a return day the schedule
+actually flies is caught essentially always. The same drop on a Tuesday
+departure is a coin toss at best - and that is the deliberate bet the warm
+tier makes, because every cheap fare found in eight months has been on the
+first kind of date. The cold rotation is what stops that bet becoming
+self-fulfilling.
+
+Two things were wrong when this was first measured, both fixed:
+
+* **The re-check backlog duplicated the cold pass.** All 1,256 queued
+  windows sat *behind* the cursor, so the pass would re-price every one of
+  them anyway. Pricing a window now clears its re-check, and the backlog
+  takes one launch in eight rather than one in four. Cold coverage went
+  from 8.2 days back to 6.1, and improves further as the queue drains.
+* **The backlog was aimed at the wrong months.** It was mostly January and
+  February dates that have never produced a cheap fare, while October to
+  December had never been swept at all.
+
+The honest limit stays: an hourly flash sale on a cold date will be missed,
+and no amount of tiering fixes that at one window per ~96 seconds. Raising
+the rate is the only lever, which is what the 90s -> 45s -> 30s ladder is
+for.
+
 ## Completeness has two halves, and only one was measured
 
 Coverage *of windows* is guaranteed: the check ledger and its invariant mean

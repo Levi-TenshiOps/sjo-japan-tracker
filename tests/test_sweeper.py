@@ -1390,3 +1390,78 @@ class TestTheBlindSpotAfterAThrottleRest:
                              "empty": True, "healthy": True} for w in ws}
         assert sweeper.unverified_windows(ws, s) == []
         assert sweeper.queue_unverified(ws, s) == 0
+
+
+class TestTheBacklogDoesNotDuplicateTheColdPass:
+    """The re-check queue and the cold rotation were doing the same job.
+
+    Measured 2026-08-24: all 1,256 queued windows sat *behind* the cursor,
+    so the pass was going to re-price every one of them anyway. Running both
+    meant visiting them twice, and the quarter-share it took pushed a full
+    cold pass from 4.9 days out to 8.2 - while the backlog was mostly
+    January and February dates that have never produced a cheap fare, and
+    October to December were still unexplored.
+    """
+
+    def test_pricing_a_window_clears_its_re_check(self, dom):
+        """Whoever priced it, it is no longer owed a second look."""
+        ws = windows(4)
+        s = SweepStore()
+        s.suspect = [w.key for w in ws]
+        sweep_batch(ws, s, batch=4, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        assert not (set(s.suspect) & {w.key for w in ws[:s.cursor]}), (
+            "a window was priced and still left in the re-check queue")
+
+    def test_the_queue_shrinks_as_the_pass_proceeds(self, dom):
+        ws = windows(12)
+        s = SweepStore()
+        s.suspect = [w.key for w in ws]
+        before = len(s.suspect)
+        sweep_batch(ws, s, batch=12, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        assert len(s.suspect) < before
+
+    def test_the_backlog_no_longer_outranks_the_frontier(self):
+        """One launch in eight, not one in four."""
+        assert sweeper.RECHECK_EVERY == 8
+
+
+class TestCoverageIsReportable:
+    """The trip owner's question, answerable without reading the code.
+
+    "A cheap price that lasts a day or two - do we get it?" For a fare
+    persisting D days on a window revisited every R days the chance is
+    ~min(1, D/R), so the answer is about R, and R differs per tier.
+    """
+
+    def _report(self):
+        ws = windows(200)
+        s = SweepStore()
+        s.found[ws[0].key] = {
+            "depart": ws[0].depart.isoformat(), "ret": ws[0].back.isoformat(),
+            "price_usd": 1347, "origin": "SJO", "destination": "TYO",
+            "stops": ["ZRH"], "airlines": ["SWISS"], "total_minutes": 2780,
+            "deep_link": "", "seen_at": datetime.now(timezone.utc).isoformat()}
+        return sweeper.coverage_report(ws, s, threshold=1400, delay_s=90.0)
+
+    def test_it_names_every_tier(self):
+        text = "\n".join(self._report())
+        for tier in ("hot", "warm", "re-check backlog", "cold"):
+            assert tier in text
+
+    def test_it_answers_the_persistence_question(self):
+        text = "\n".join(self._report())
+        assert "a fare that lasts this long is caught" in text
+        assert "1 day(s)" in text and "7 day(s)" in text
+
+    def test_a_faster_sweep_reports_shorter_revisits(self):
+        ws = windows(200)
+        s = SweepStore()
+        slow = sweeper.coverage_report(ws, s, threshold=1400, delay_s=90.0)
+        fast = sweeper.coverage_report(ws, s, threshold=1400, delay_s=30.0)
+        assert "899" in slow[0] and "2393" in fast[0].replace(",", "")
+
+    def test_it_survives_an_empty_store(self):
+        assert sweeper.coverage_report(windows(10), SweepStore(),
+                                       threshold=1400)
