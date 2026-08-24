@@ -353,25 +353,29 @@ class TestTheStartupLauncherActuallyLogs:
     for first.
     """
 
-    def _emitted_launcher(self) -> str:
-        done = subprocess.run(
-            [sys.executable, str(ROOT / "install_schedule.py")],
-            capture_output=True, text=True, timeout=60, cwd=str(ROOT))
-        lines = [ln for ln in done.stdout.splitlines()
-                 if "sweep_forever.py" in ln and "start " in ln]
-        assert len(lines) == 1, done.stdout
-        return lines[0]
+    def _launcher_text(self) -> str:
+        """The launcher line as the installer will print it.
+
+        Read from the source rather than by running the installer:
+        `install_schedule.py` refuses to start without `preferences.json`,
+        which is gitignored because it holds personal data, so executing it
+        passes locally and fails in CI. That has now caught me twice.
+        """
+        src = (ROOT / "install_schedule.py").read_text(encoding="utf-8")
+        i = src.find("-u sweep_forever.py")
+        assert i > 0, "the installer no longer writes a sweep launcher"
+        return src[i:i + 200].split("print(")[0]
 
     def test_it_passes_log_rather_than_redirecting(self):
-        line = self._emitted_launcher()
-        assert "--log" in line, line
-        assert ">>" not in line, f"the redirect is back, and it does not work: {line}"
-        assert "2>&1" not in line, line
+        text = self._launcher_text()
+        assert "--log" in text, text
+        assert ">>" not in text, f"the redirect is back, and it does not work: {text}"
+        assert "2>&1" not in text, text
 
     def test_the_log_path_is_absolute(self):
         """The child's cwd is not ours to assume."""
-        line = self._emitted_launcher()
-        assert "$root" in line.split("--log", 1)[1], line
+        text = self._launcher_text()
+        assert "$root" in text.split("--log", 1)[1], text
 
     def test_sweep_forever_accepts_the_flag_the_installer_writes(self):
         """The installer is only correct if the flag actually exists."""
@@ -382,4 +386,4 @@ class TestTheStartupLauncherActuallyLogs:
 
     def test_the_rate_is_still_absent(self):
         """The other thing this launcher must never carry."""
-        assert "--delay" not in self._emitted_launcher()
+        assert "--delay" not in self._launcher_text()
