@@ -841,6 +841,51 @@ enforced round trips for the return date but not its absence; the deny list
 covered the airports someone had thought of. When adding a rule, grep for
 every path that should obey it.
 
+## The alarm only watched the sweep, not the six scheduled runs
+
+Found 2026-08-24 during a "is everything actually gathering information?"
+review, and it is the same shape as the eight defects in the 15-round
+audit: a rule enforced on one path and not on its parallel.
+
+`sweep_forever.py` could email a throttle alarm. `cli.py` could not - it
+had no alarm wiring at all. So the warning existed exactly when the sweep
+was running, and the sweep is the part that gets stopped: it was down for
+hours on 2026-08-23, and stopping it is the documented response to a
+throttle. Precisely when the scheduled runs were the only thing still
+talking to Google, nothing was watching them.
+
+It had already happened. The 12:26 run on 2026-08-24 came back empty on
+the HTTP grid (6 of 8) *and* on all nine Chrome launches, including
+2027-01-29 +27n, whose $1,347 fare has been there for days. Nobody was
+told. The run still emailed, because the background sweep's findings
+carried it, so from the outside the day looked normal.
+
+`run_looks_blocked` in `cli.py` now raises it, and the rule is
+deliberately "both channels dark in the same run":
+
+* The grid alone proves nothing - it is empty on most windows by design
+  and its budget has been floored at 8 since 2026-08-23.
+* Chrome alone is one process sharing one profile directory, so a corrupt
+  `.chrome-profile` would look identical to a throttle.
+* Fewer than three launches is not a sample.
+
+Blankness is counted on the **page**, before the visa filter. A window
+that returned fourteen US-transit fares and kept none of them is Google
+answering perfectly well. Counting that as a blank is the exact bug that
+sent a 70% false alarm on 2026-08-24, so `verify()` reports
+`stats["blank"]` from the parse, and `tests/test_verify.py::TestBlankCounting`
+pins it.
+
+`throttle.blocked_alarm_sent` keeps six runs a day from sending six
+identical warnings, and clears with an all-clear email when a run gets
+answers again.
+
+**The 12:26 blackout itself was transient.** Re-priced the same window
+through the same code path at 14:05 the same day: $1,347 in 26.2 seconds,
+13 options parsed, 9 visa-rejected. Nothing is wrong with the Chrome
+path - which is the point. The defect was never the blackout, it was that
+a blackout could pass in silence.
+
 ## Layout
 
 ```

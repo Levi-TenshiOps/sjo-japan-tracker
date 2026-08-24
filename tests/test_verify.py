@@ -456,3 +456,54 @@ class TestChromeLaunchesArePaced:
     def test_no_sleep_callback_is_still_fine(self):
         """Callers that do not pace must not break."""
         assert verify(self.targets(2), fetch=lambda url: "") == []
+
+
+class TestBlankCounting:
+    """`stats["blank"]` must mean "Google sent an empty page".
+
+    Not "nothing survived our filters". A window that returned fourteen
+    US-transit fares and kept none of them is Google answering perfectly
+    well. Counting that as a blank is what produced a 70% throttle false
+    alarm on 2026-08-24, and the run-level block alarm added the same day
+    is built directly on this number.
+    """
+
+    def test_a_page_full_of_visa_rejects_is_not_blank(self, dom):
+        stats: dict = {}
+        targets = choose_targets(hint_keys=[key("2027-01-29", "2027-02-25")],
+                                 today=TODAY)
+        got = verify(targets, fetch=FakeChrome(dom), stats=stats)
+        # Four of the five options in the fixture are visa-rejected.
+        assert len(got) == 1
+        assert stats == {"attempts": 1, "blank": 0}
+
+    def test_nothing_surviving_a_later_filter_is_still_not_blank(self, dom):
+        """The duration cap runs after parsing, so it cannot make a blank."""
+        stats: dict = {}
+        targets = choose_targets(hint_keys=[key("2027-01-29", "2027-02-25")],
+                                 today=TODAY)
+        got = verify(targets, fetch=FakeChrome(dom), stats=stats,
+                     max_total_hours=1)
+        assert got == []
+        assert stats["blank"] == 0
+
+    def test_an_empty_page_is_blank(self):
+        stats: dict = {}
+        targets = choose_targets(hint_keys=[key("2027-01-29", "2027-02-25")],
+                                 today=TODAY)
+        verify(targets, fetch=FakeChrome(""), stats=stats)
+        assert stats == {"attempts": 1, "blank": 1}
+
+    def test_attempts_counts_every_launch(self, dom):
+        stats: dict = {}
+        targets = choose_targets(
+            hint_keys=[key("2027-01-29", "2027-02-25"),
+                       key("2027-02-01", "2027-02-22"),
+                       key("2027-02-05", "2027-03-05")], today=TODAY)
+        verify(targets, fetch=FakeChrome(dom, fail_after=1), stats=stats)
+        assert stats == {"attempts": 3, "blank": 2}
+
+    def test_stats_is_optional(self, dom):
+        targets = choose_targets(hint_keys=[key("2027-01-29", "2027-02-25")],
+                                 today=TODAY)
+        assert verify(targets, fetch=FakeChrome(dom))          # no stats kwarg

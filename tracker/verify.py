@@ -201,11 +201,20 @@ def verify(
     delay_s: float = 2.0,
     jitter_s: float = 2.0,
     max_total_hours: int | None = None,
+    stats: dict | None = None,
 ) -> list[BrowserOption]:
     """Price each target through Chrome. Visa-rejected options are dropped.
 
     `fetch` is injectable so tests never launch a browser. Returns every
     surviving option across all targets, cheapest first.
+
+    `stats`, if given, is filled with "attempts" and "blank" - how many
+    launches happened and how many produced no parsable option at all.
+    "blank" counts an empty *page*, before the visa filter, and that
+    distinction is the whole point: on 2026-08-24 a throttle detector
+    counted visa-rejected options as blanks and cried wolf at 70% on a
+    perfectly healthy day. A window where Google answered with fourteen
+    US-transit fares is Google answering.
     """
     exe = chrome or chrome_path(chrome_override)
     if exe is None and fetch is None:
@@ -216,12 +225,14 @@ def verify(
     grab = fetch or (lambda url: fetch_dom(url, chrome=exe, timeout=timeout_s,
                                            virtual_time_budget_ms=budget_ms))
     found: list[BrowserOption] = []
+    attempts = blank = 0
     for n, t in enumerate(targets):
         query = build_query(RouteQuery(origin=origin, destination=destination,
                                        outbound=t.depart, inbound=t.ret,
                                        max_stops=max_stops, hub=None))
         url = query.url()
         dom = grab(url)
+        attempts += 1
         options = parse_options(dom, origin=origin, destination=destination,
                                 depart_date=t.depart, return_date=t.ret,
                                 deep_link=url)
@@ -239,6 +250,7 @@ def verify(
                      len(options), rejected,
                      f"${min(o.price_usd for o in usable):,}" if usable else "none")
         else:
+            blank += 1
             log.info("Chrome %s %s +%dn: nothing returned",
                      t.source, t.depart, (t.ret - t.depart).days)
         found.extend(usable)
@@ -251,6 +263,9 @@ def verify(
         if sleep and delay_s:
             sleep(delay_s + random.uniform(0, max(jitter_s, 0.0)))
 
+    if stats is not None:
+        stats["attempts"] = attempts
+        stats["blank"] = blank
     found.sort(key=lambda o: o.price_usd)
     return found
 

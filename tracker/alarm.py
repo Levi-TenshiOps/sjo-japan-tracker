@@ -125,6 +125,54 @@ def recovered_email(*, minutes: float, suspect: int,
         ])
 
 
+def run_blocked_email(*, chrome_blank: int, chrome_attempts: int,
+                      grid_rate: float, when: str) -> EmailContent:
+    """A scheduled run whose every channel came back empty.
+
+    Distinct from `blocked_email`, which the sweep raises about its own
+    traffic. The sweep can be stopped for hours - it was on 2026-08-23 -
+    and while it is, nothing watches the six scheduled runs at all. That
+    gap is how the 12:26 run on 2026-08-24 went completely dark, both the
+    HTTP grid and all nine Chrome launches, and told nobody.
+    """
+    return _plain(
+        "⚠ A scheduled flight-tracker run got nothing from Google",
+        [
+            f"The {when} run came back empty on every channel it tried.",
+            "",
+            f"Chrome: {chrome_blank} of {chrome_attempts} launches returned "
+            "a page with no flights on it at all - including windows that "
+            "are known to hold fares.",
+            f"HTTP grid: {grid_rate:.0f}% of its requests came back empty.",
+            "",
+            "One channel going quiet is ordinary; a date really can have no "
+            "fares. Both going quiet in the same run, on windows already "
+            "known to be cheap, is Google refusing rather than answering.",
+            "",
+            "Nothing is needed from you. The next run is in about four "
+            "hours and will report if it clears. Do not query Google to "
+            "check - every check is another request to a host already "
+            "refusing, which is what turned a short throttle into an hour "
+            "of one on 2026-08-23.",
+            "",
+            "Your email for today is not lost: the run still sends what the "
+            "background sweep has found.",
+        ])
+
+
+def run_recovered_email(*, when: str, cheapest: str) -> EmailContent:
+    """The all-clear for the scheduled runs."""
+    return _plain(
+        "✓ The scheduled runs are getting fares again",
+        [
+            f"The {when} run got answers from Google again.",
+            f"Cheapest fare it could verify: {cheapest}.",
+            "",
+            "No action needed; this is the all-clear for the earlier "
+            "warning.",
+        ])
+
+
 # Two emails a day means the longest legitimate gap is overnight: the
 # evening digest at ~21:30 to the morning run at ~06:45, about nine hours.
 # Sixteen hours is comfortably past any normal gap and still catches a

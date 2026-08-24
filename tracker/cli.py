@@ -12,8 +12,9 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from . import (
-    alerts, config as config_mod, email_render, gate, history, monthly, notify,
-    pricing, ranking, schedule, sweeper, throttle, verify as verify_mod,
+    alarm as alarm_mod, alerts, config as config_mod, email_render, gate,
+    history, monthly, notify, pricing, ranking, schedule, sweeper, throttle,
+    verify as verify_mod,
 )
 from .itinerary import Itinerary, dedupe, format_price, partition
 from .preferences import Preferences, PreferencesError
@@ -169,6 +170,49 @@ def collect(cfg, plan, searcher: Searcher, probe_destinations=()):
     )
     return (dedupe(accepted), rejected, errors, (judged, empties),
             pricing.median_bands(bands_seen))
+
+
+# How dark a run has to go before the trip owner is emailed about it.
+# Deliberately conservative: they were woken by a false alarm on
+# 2026-08-24, and an alarm nobody trusts is worse than no alarm.
+BLOCKED_MIN_CHROME = 3       # too few launches to conclude anything
+BLOCKED_GRID_RATE = 0.5      # half the grid empty as well
+
+
+def run_looks_blocked(*, chrome_attempts: int, chrome_blank: int,
+                      grid_requests: int, grid_empty: int) -> bool:
+    """True when every channel this run tried came back with nothing.
+
+    The test is deliberately "both channels, same run" rather than either
+    one alone. A single channel going quiet is ordinary - the HTTP grid is
+    empty on most windows by design, and a date really can have no fares.
+    Both going quiet at once, on windows already known to hold fares, is
+    Google refusing to answer.
+
+    Chrome blankness is counted on the *page*, not on the visa filter. A
+    window that returned fourteen US-transit fares and kept none of them is
+    Google answering perfectly well; counting that as a blank is exactly
+    the bug that produced a 70% false alarm on 2026-08-24.
+    """
+    if chrome_attempts < BLOCKED_MIN_CHROME or chrome_blank < chrome_attempts:
+        return False
+    if grid_requests <= 0:
+        # Chrome is the better witness, but on its own it is one process
+        # and one profile; a corrupt Chrome profile would look identical.
+        return False
+    return grid_empty / grid_requests >= BLOCKED_GRID_RATE
+
+
+def _send_alarm(content, alarm_cfg) -> None:
+    """Best effort. A failed alarm must never cost the trip owner an email."""
+    if not alarm_cfg.usable:
+        log.warning("No SMTP configured, so the block alarm could not be "
+                    "sent. Run setup_email.py to fix that.")
+        return
+    try:
+        alarm_mod.send(content, alarm_cfg)
+    except Exception as exc:                # noqa: BLE001
+        log.warning("alarm failed (%s); continuing with the run", exc)
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -440,6 +484,7 @@ def run(argv: list[str] | None = None) -> int:
     # $1,347 on Edelweiss/SWISS. Whatever Chrome finds is the truth for
     # these windows, so it is logged loudly and drives the alert price.
     verified: list = []
+    chrome_stats: dict = {}
     if cfg.chrome_verify:
         targets = verify_mod.choose_targets(
             hint_keys=monthly.hint_window_keys(month_hints),
@@ -458,6 +503,7 @@ def run(argv: list[str] | None = None) -> int:
                 max_total_hours=cfg.max_total_hours,
                 timeout_s=cfg.chrome_timeout_s, budget_ms=cfg.chrome_budget_ms,
                 sleep=time.sleep, delay_s=cfg.request_delay_seconds,
+                stats=chrome_stats,
             )
     # Fold in whatever the background sweep has found since the last run.
     # It walks every window in the space, so it reaches dates this run's
@@ -491,6 +537,35 @@ def run(argv: list[str] | None = None) -> int:
         else:
             log.info("Chrome: %d window(s) checked, no visa-free option found",
                      len(targets))
+
+    # Tell the trip owner when a run gets nothing at all. Until now only the
+    # sweep could raise a block alarm, so whenever the sweep was stopped -
+    # which it was for hours on 2026-08-23 - nothing watched these six runs.
+    # The 12:26 run on 2026-08-24 went dark on every channel and told nobody.
+    blocked_now = run_looks_blocked(
+        chrome_attempts=chrome_stats.get("attempts", 0),
+        chrome_blank=chrome_stats.get("blank", 0),
+        grid_requests=judged_requests, grid_empty=empties,
+    )
+    alarm_cfg = alarm_mod.AlarmConfig.from_config(cfg, prefs)
+    when = datetime.now(CR_TZ).strftime("%H:%M")
+    if blocked_now and not throttle_state.blocked_alarm_sent:
+        log.warning("Every channel came back empty; emailing the alarm")
+        rate = 100.0 * empties / judged_requests if judged_requests else 0.0
+        _send_alarm(alarm_mod.run_blocked_email(
+            chrome_blank=chrome_stats.get("blank", 0),
+            chrome_attempts=chrome_stats.get("attempts", 0),
+            grid_rate=rate, when=when), alarm_cfg)
+        throttle_state.blocked_alarm_sent = True
+        throttle_state.save(cfg.throttle_file)
+    elif not blocked_now and throttle_state.blocked_alarm_sent:
+        log.info("Google is answering again; emailing the all-clear")
+        _send_alarm(alarm_mod.run_recovered_email(
+            when=when,
+            cheapest=(format_price(verified[0].price_usd) if verified
+                      else "none yet")), alarm_cfg)
+        throttle_state.blocked_alarm_sent = False
+        throttle_state.save(cfg.throttle_file)
 
     preview = ranking.select_top(
         accepted, count=prefs.result_count,

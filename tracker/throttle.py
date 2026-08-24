@@ -47,6 +47,11 @@ class ThrottleState:
     recent: list[dict] = field(default_factory=list)  # newest last
     consecutive_bad: int = 0
     last_run_utc: str = ""
+    # Whether the trip owner has already been emailed that the scheduled
+    # runs are getting nothing. Kept here rather than in cli.py because it
+    # has to survive between runs: six runs a day would otherwise send six
+    # identical warnings about one throttle.
+    blocked_alarm_sent: bool = False
 
     @classmethod
     def load(cls, path: str | Path) -> "ThrottleState":
