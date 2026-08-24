@@ -135,6 +135,27 @@ def append(path: str | Path, rows: Sequence[Row]) -> int:
     return len(rows)
 
 
+def _field(rec: dict, name: str) -> str:
+    """One CSV field as a string, whatever the row looks like.
+
+    `csv.DictReader` fills missing fields with None, so a truncated row -
+    the kind an append leaves behind when the process is killed mid-write -
+    yields None rather than "". `rec.get(name, "")` returns that None and
+    `.upper()` on it raises.
+
+    That is not hypothetical. On 2026-08-24 a hard kill of the sweeper left
+    a single line reading "0" in sweep_history.csv, and from then on **every
+    scheduled run crashed** at this exact call - four hours with no email,
+    while the sweep itself carried on happily. One malformed line took down
+    the product.
+
+    An append-only log written by a process that can be killed will always
+    be able to end mid-line, so the reader is the place to be tolerant.
+    """
+    value = rec.get(name)
+    return value if isinstance(value, str) else ""
+
+
 def read_prices(
     path: str | Path,
     *,
@@ -158,14 +179,14 @@ def read_prices(
     prices: list[float] = []
     with p.open(newline="", encoding="utf-8") as fh:
         for rec in csv.DictReader(fh):
-            if origin and rec.get("origin", "").upper() != origin.upper():
+            if origin and _field(rec, "origin").upper() != origin.upper():
                 continue
-            if destination and rec.get("destination", "").upper() != destination.upper():
+            if destination and _field(rec, "destination").upper() != destination.upper():
                 continue
-            if band_source and rec.get("band_source", "") != band_source:
+            if band_source and _field(rec, "band_source") != band_source:
                 continue
             if since:
-                stamp = rec.get("checked_at_utc", "")[:10]
+                stamp = _field(rec, "checked_at_utc")[:10]
                 try:
                     if datetime.strptime(stamp, "%Y-%m-%d").date() < since:
                         continue
@@ -188,9 +209,9 @@ def distinct_days(path: str | Path, *, origin: str | None = None) -> int:
     days: set[str] = set()
     with p.open(newline="", encoding="utf-8") as fh:
         for rec in csv.DictReader(fh):
-            if origin and rec.get("origin", "").upper() != origin.upper():
+            if origin and _field(rec, "origin").upper() != origin.upper():
                 continue
-            stamp = (rec.get("checked_at_utc") or "")[:10]
+            stamp = _field(rec, "checked_at_utc")[:10]
             if len(stamp) == 10:
                 days.add(stamp)
     return len(days)

@@ -94,3 +94,55 @@ class TestDistinctDays:
         history.append(p, rows(items))
         assert history.distinct_days(p, origin="SJO") == 1
         assert history.distinct_days(p, origin="LIR") == 0
+
+
+class TestOneBadLineCannotTakeDownTheTracker:
+    """An append-only log written by a killable process ends mid-line.
+
+    On 2026-08-24 a hard kill of the sweeper left a single line reading "0"
+    in sweep_history.csv. `csv.DictReader` fills the missing fields with
+    None, `rec.get("origin", "")` returned that None, and `.upper()` raised
+    - so **every scheduled run crashed** from then on. Four hours with no
+    email, while the sweep itself carried on happily and the health line
+    looked perfect. The trip owner noticed because the emails stopped.
+
+    The writer cannot be made atomic - it is an append to a growing log - so
+    the reader is where tolerance belongs.
+    """
+
+    HEADER = ("checked_at_utc,origin,destination,depart_date,return_date,"
+              "price_usd,duration_min,stops,hubs,airlines,band,band_source,"
+              "deep_link\n")
+    GOOD = ("2026-08-24T13:41:03+00:00,SJO,TYO,2027-01-24,2027-02-17,1720,"
+            "2805,1,FRA,Lufthansa,TYPICAL,CHROME,\n")
+
+    def _write(self, tmp_path, *rows):
+        p = tmp_path / "h.csv"
+        p.write_text(self.HEADER + "".join(rows), encoding="utf-8")
+        return p
+
+    def test_a_truncated_row_does_not_raise(self, tmp_path):
+        p = self._write(tmp_path, self.GOOD, "0\n", self.GOOD)
+        assert history.read_prices(p, origin="SJO", band_source="CHROME") == [1720, 1720]
+
+    def test_the_good_rows_around_it_still_count(self, tmp_path):
+        p = self._write(tmp_path, "0\n", self.GOOD)
+        assert len(history.read_prices(p, origin="SJO")) == 1
+
+    def test_distinct_days_survives_it_too(self, tmp_path):
+        p = self._write(tmp_path, self.GOOD, "0\n")
+        assert history.distinct_days(p, origin="SJO") == 1
+
+    def test_a_row_cut_mid_field_is_survivable(self, tmp_path):
+        p = self._write(tmp_path, "2026-08-24T13:41:03+00:00,SJO,TY\n", self.GOOD)
+        assert history.read_prices(p, origin="SJO") == [1720]
+
+    def test_an_empty_trailing_line_is_fine(self, tmp_path):
+        p = self._write(tmp_path, self.GOOD, "\n")
+        assert history.read_prices(p, origin="SJO") == [1720]
+
+    def test_filters_still_work_around_a_bad_row(self, tmp_path):
+        """The tolerance must not become 'accept everything'."""
+        p = self._write(tmp_path, "0\n", self.GOOD)
+        assert history.read_prices(p, origin="MEX") == []
+        assert history.read_prices(p, band_source="GOOGLE") == []

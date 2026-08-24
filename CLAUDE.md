@@ -393,6 +393,46 @@ about four minutes, six times a day - roughly 18 windows out of ~900. Taking
 and releasing per launch would recover that and add a lot of lock churn for
 a rounding error.
 
+## One malformed CSV line silently killed the product for four hours
+
+The worst failure this project has had, and the most instructive.
+
+`sweep_history.csv` is an append-only log. A hard kill of the sweeper on
+2026-08-24 left a partial write behind - a single line reading `0`.
+`csv.DictReader` fills the missing fields of a short row with **None**, so
+`rec.get("origin", "")` returned None rather than "", and `.upper()` raised:
+
+    AttributeError: 'NoneType' object has no attribute 'upper'
+      history.py:161
+
+From that moment **every scheduled run crashed**, at the same line, four
+hours before the email phase. No email went out. Meanwhile the sweep itself
+carried on perfectly, `--status` looked healthy, the health line said 15%
+empty, and every check I ran said we were fine.
+
+What made it invisible:
+
+* The crash is after the last log line the run writes, so `tracker.log`
+  simply stopped mid-run with no error in it.
+* Task Scheduler recorded `result 1`, which is indistinguishable from the
+  run's own "the email failed to send" exit code.
+* Nothing watches for "a scheduled run stopped producing emails".
+
+The trip owner found it the only way it was findable: the emails stopped
+arriving.
+
+Three lessons, in order of how much they cost:
+
+1. **Tolerate the log, do not trust it.** An append-only file written by a
+   process that can be killed will always be able to end mid-line. The
+   writer cannot be made atomic; the reader is where tolerance belongs.
+   `history._field` returns "" for anything that is not a string.
+2. **Stop the sweeper cleanly.** `sweep_forever.py --stop` exists precisely
+   so a kill never happens mid-write. Every hard kill risks this.
+3. **A green health line is not a working product.** Everything the sweep
+   reported was true and the thing the trip owner actually receives had
+   been dead for hours.
+
 ## Will we catch a price drop that lasts a day or two?
 
 The trip owner's question, and the right one. For a fare that persists D
