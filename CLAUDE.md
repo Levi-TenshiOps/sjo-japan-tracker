@@ -922,6 +922,46 @@ The lesson is the recurring one in a third costume: **never crash on a
 file you only read** - and if you do crash, say so where somebody will
 look. Grep for every reader when fixing one; there were five last time.
 
+## The reboot launcher started the sweep and threw away its log
+
+Found 2026-08-24, the second defect in that one file, and the same shape as
+the first: the launcher runs unattended at every boot, so whatever is wrong
+with it is wrong exactly when nobody is watching.
+
+It read:
+
+    start "" /min "...python.exe" -u sweep_forever.py --batch 25 ^
+        >> "...\sweep.log" 2>&1
+
+`start` opens a **new console** and returns immediately, so that redirection
+never captured the sweep's output at all. What it did do was leave a handle
+on `sweep.log`, and `logging.FileHandler` then failed to open it. The
+warning about that - `could not open sweep.log for logging` - went to the
+new console, which is minimised and discarded.
+
+So the sweep ran perfectly and wrote nothing:
+
+    store    advanced every ~110s   (windows being priced normally)
+    sweep.log frozen at 14:23:10    (the previous run's last line)
+
+Both halves matter. A sweep that logs nothing is not merely untidy - a
+frozen `sweep.log` looks exactly like a sweeper that has died, which is the
+first diagnosis this project reaches for, and the throttle warnings that
+are the entire early-warning system go to the same place.
+
+The fix is `--log` with an absolute path, so Python opens the file itself
+and the child's working directory cannot matter, and no shell redirection
+at all. `TestTheStartupLauncherActuallyLogs` pins both.
+
+**The general rule, third time of asking: `start` is not a shell.** It
+launches and returns, so redirection, `&&`, and quoting all behave
+differently from how they read. If a launcher needs output somewhere, the
+program has to be told where - it cannot be arranged around it.
+
+The liveness signal, meanwhile, is the store's mtime, not the log. A
+window only logs a line when Google's claimed count exceeds what was
+parsed, so a healthy sweep is legitimately quiet for minutes at a time.
+
 ## Layout
 
 ```

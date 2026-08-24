@@ -248,6 +248,16 @@ def print_windows(hours: list[int], root: Path) -> int:
     print("}")
     print(f'"registered {n_runs} daily runs"')
 
+    # And no ">> sweep.log" either. `start` opens a new console and returns
+    # at once, so the redirection never captured the sweep's output - it only
+    # left a handle on the file, and `logging.FileHandler` then failed to
+    # open it. That warning went to the new console, which is minimised and
+    # thrown away, so the sweep ran perfectly and logged nothing. Measured
+    # 2026-08-24: the store advanced every ~110s while sweep.log sat frozen.
+    # After a reboot - the one thing this launcher exists for - the sweep
+    # would have been running blind. `--log` is passed instead, absolute, so
+    # Python opens the file itself and the child's cwd cannot matter.
+    #
     # No --delay is spelled out below on purpose: the default is 90s and
     # the default is the safe number. A rate written into a file that runs
     # unattended at every boot is how `--delay 6` survived on this machine
@@ -264,7 +274,7 @@ def print_windows(hours: list[int], root: Path) -> int:
     print('  "@echo off",')
     print('  "cd /d \\"$root\\"",')
     print('  "start \\"\\" /min \\"$py\\" -u sweep_forever.py '
-          '--batch 25 >> \\"$root\\sweep.log\\" 2>&1"')
+          '--batch 25 --log \\"$root\\sweep.log\\""')
     print(")")
     print('Set-Content -Path (Join-Path $startup "FlightTrackerSweep.cmd") '
           "-Value $lines -Encoding ASCII")

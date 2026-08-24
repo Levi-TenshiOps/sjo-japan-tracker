@@ -329,3 +329,57 @@ class TestTheInstallerNeverArmsTheThrottleAgain:
             [sys.executable, str(ROOT / "sweep_forever.py"), "--help"],
             capture_output=True, text=True, timeout=60, cwd=str(ROOT))
         assert "default 90" in done.stdout, done.stdout
+
+
+class TestTheStartupLauncherActuallyLogs:
+    r"""The launcher's whole purpose is the run nobody is watching.
+
+    Found 2026-08-24. The launcher read:
+
+        start "" /min "...python.exe" -u sweep_forever.py --batch 25 ^
+            >> "...\sweep.log" 2>&1
+
+    `start` opens a new console and returns at once, so that redirection
+    never captured the sweep's output at all. What it did do was leave a
+    handle on sweep.log, and `logging.FileHandler` then failed to open it -
+    reporting that failure to the new console, which is minimised and
+    discarded.
+
+    So the sweep ran perfectly and wrote nothing. Measured on the live
+    machine: the store advanced every ~110 seconds while sweep.log sat
+    frozen at the previous run's last line. After a reboot the sweep would
+    have been running blind, and `sweep.log` would have looked exactly like
+    a sweeper that had died - which is the diagnosis this project reaches
+    for first.
+    """
+
+    def _emitted_launcher(self) -> str:
+        done = subprocess.run(
+            [sys.executable, str(ROOT / "install_schedule.py")],
+            capture_output=True, text=True, timeout=60, cwd=str(ROOT))
+        lines = [ln for ln in done.stdout.splitlines()
+                 if "sweep_forever.py" in ln and "start " in ln]
+        assert len(lines) == 1, done.stdout
+        return lines[0]
+
+    def test_it_passes_log_rather_than_redirecting(self):
+        line = self._emitted_launcher()
+        assert "--log" in line, line
+        assert ">>" not in line, f"the redirect is back, and it does not work: {line}"
+        assert "2>&1" not in line, line
+
+    def test_the_log_path_is_absolute(self):
+        """The child's cwd is not ours to assume."""
+        line = self._emitted_launcher()
+        assert "$root" in line.split("--log", 1)[1], line
+
+    def test_sweep_forever_accepts_the_flag_the_installer_writes(self):
+        """The installer is only correct if the flag actually exists."""
+        done = subprocess.run(
+            [sys.executable, str(ROOT / "sweep_forever.py"), "--help"],
+            capture_output=True, text=True, timeout=60, cwd=str(ROOT))
+        assert "--log" in done.stdout, done.stdout
+
+    def test_the_rate_is_still_absent(self):
+        """The other thing this launcher must never carry."""
+        assert "--delay" not in self._emitted_launcher()
