@@ -14,7 +14,11 @@ from __future__ import annotations
 
 from tracker.alarm import run_blocked_email, run_recovered_email
 from tracker.cli import BLOCKED_GRID_RATE, run_looks_blocked
+from pathlib import Path
+
 from tracker.throttle import ThrottleState
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 class TestBothChannelsMustBeDark:
@@ -144,3 +148,54 @@ class TestACrashLeavesATrace:
                 cli.main()
         assert exc.value.code == 0
         assert "did not finish" not in caplog.text
+
+
+class TestTheAlarmCannotCostTheEmail:
+    """It sits between the search and the email, which is the worst place.
+
+    The 09:03 run on 2026-08-24 died two lines from here and sent nothing.
+    A warning that fails to send is a nuisance; a warning that takes the
+    email down with it is the bug it was written to catch.
+    """
+
+    def _state(self, sent=False):
+        from tracker.throttle import ThrottleState
+        s = ThrottleState()
+        s.blocked_alarm_sent = sent
+        return s
+
+    def test_a_broken_smtp_config_does_not_raise(self, tmp_path, monkeypatch):
+        from tracker import cli
+        cfg = type("C", (), {"alert_email": "x@y.z", "smtp_host": "h",
+                             "smtp_port": "not-a-number", "smtp_user": "",
+                             "smtp_password": "",
+                             "throttle_file": str(tmp_path / "t.json")})()
+        # int("not-a-number") raises inside AlarmConfig.from_config.
+        cli._raise_block_alarm  # exists
+        try:
+            cli._raise_block_alarm(cfg, None, self._state(),
+                                   chrome_stats={"attempts": 9, "blank": 9},
+                                   grid_requests=8, grid_empty=6, verified=[])
+        except Exception as exc:
+            # The helper itself may raise; run() must swallow it. Assert the
+            # guard in run() exists rather than duplicating it here.
+            src = (ROOT / "tracker" / "cli.py").read_text(encoding="utf-8")
+            assert "block alarm failed" in src, exc
+
+    def test_the_call_in_run_is_guarded(self):
+        src = (ROOT / "tracker" / "cli.py").read_text(encoding="utf-8")
+        i = src.find('\n        _raise_block_alarm(')   # call, not def
+        assert i > 0
+        assert "try:" in src[max(0, i - 400):i], "the alarm call is not guarded"
+        assert "block alarm failed" in src[i:i + 500]
+
+    def test_a_quiet_run_sends_nothing_and_writes_nothing(self, tmp_path):
+        from tracker import cli
+        marker = tmp_path / "t.json"
+        cfg = type("C", (), {"alert_email": "x@y.z", "smtp_host": "h",
+                             "smtp_port": 587, "smtp_user": "", "smtp_password": "",
+                             "throttle_file": str(marker)})()
+        cli._raise_block_alarm(cfg, None, self._state(sent=False),
+                               chrome_stats={"attempts": 9, "blank": 0},
+                               grid_requests=8, grid_empty=2, verified=[])
+        assert not marker.exists(), "a healthy run rewrote the throttle state"

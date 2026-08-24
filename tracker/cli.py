@@ -185,6 +185,35 @@ BLOCKED_MIN_CHROME = 3       # too few launches to conclude anything
 BLOCKED_GRID_RATE = 0.5      # half the grid empty as well
 
 
+def _raise_block_alarm(cfg, prefs, throttle_state, *, chrome_stats: dict,
+                       grid_requests: int, grid_empty: int, verified) -> None:
+    """Email the trip owner when a run gets nothing, and when it recovers."""
+    blocked_now = run_looks_blocked(
+        chrome_attempts=chrome_stats.get("attempts", 0),
+        chrome_blank=chrome_stats.get("blank", 0),
+        grid_requests=grid_requests, grid_empty=grid_empty,
+    )
+    if blocked_now == bool(throttle_state.blocked_alarm_sent):
+        return                              # nothing has changed; stay quiet
+    alarm_cfg = alarm_mod.AlarmConfig.from_config(cfg, prefs)
+    when = datetime.now(CR_TZ).strftime("%H:%M")
+    if blocked_now:
+        log.warning("Every channel came back empty; emailing the alarm")
+        rate = 100.0 * grid_empty / grid_requests if grid_requests else 0.0
+        _send_alarm(alarm_mod.run_blocked_email(
+            chrome_blank=chrome_stats.get("blank", 0),
+            chrome_attempts=chrome_stats.get("attempts", 0),
+            grid_rate=rate, when=when), alarm_cfg)
+    else:
+        log.info("Google is answering again; emailing the all-clear")
+        _send_alarm(alarm_mod.run_recovered_email(
+            when=when,
+            cheapest=(format_price(verified[0].price_usd) if verified
+                      else "none yet")), alarm_cfg)
+    throttle_state.blocked_alarm_sent = blocked_now
+    throttle_state.save(cfg.throttle_file)
+
+
 def run_looks_blocked(*, chrome_attempts: int, chrome_blank: int,
                       grid_requests: int, grid_empty: int) -> bool:
     """True when every channel this run tried came back with nothing.
@@ -548,30 +577,19 @@ def run(argv: list[str] | None = None) -> int:
     # sweep could raise a block alarm, so whenever the sweep was stopped -
     # which it was for hours on 2026-08-23 - nothing watched these six runs.
     # The 12:26 run on 2026-08-24 went dark on every channel and told nobody.
-    blocked_now = run_looks_blocked(
-        chrome_attempts=chrome_stats.get("attempts", 0),
-        chrome_blank=chrome_stats.get("blank", 0),
-        grid_requests=judged_requests, grid_empty=empties,
-    )
-    alarm_cfg = alarm_mod.AlarmConfig.from_config(cfg, prefs)
-    when = datetime.now(CR_TZ).strftime("%H:%M")
-    if blocked_now and not throttle_state.blocked_alarm_sent:
-        log.warning("Every channel came back empty; emailing the alarm")
-        rate = 100.0 * empties / judged_requests if judged_requests else 0.0
-        _send_alarm(alarm_mod.run_blocked_email(
-            chrome_blank=chrome_stats.get("blank", 0),
-            chrome_attempts=chrome_stats.get("attempts", 0),
-            grid_rate=rate, when=when), alarm_cfg)
-        throttle_state.blocked_alarm_sent = True
-        throttle_state.save(cfg.throttle_file)
-    elif not blocked_now and throttle_state.blocked_alarm_sent:
-        log.info("Google is answering again; emailing the all-clear")
-        _send_alarm(alarm_mod.run_recovered_email(
-            when=when,
-            cheapest=(format_price(verified[0].price_usd) if verified
-                      else "none yet")), alarm_cfg)
-        throttle_state.blocked_alarm_sent = False
-        throttle_state.save(cfg.throttle_file)
+    # The whole block is best-effort. It sits between the search and the
+    # email, which is precisely where a crash costs the trip owner the
+    # thing they actually receive - the 09:03 run on 2026-08-24 died two
+    # lines from here and sent nothing. A warning that fails to send is a
+    # nuisance; a warning that takes the email down with it is the bug it
+    # was written to catch.
+    try:
+        _raise_block_alarm(cfg, prefs, throttle_state,
+                           chrome_stats=chrome_stats,
+                           grid_requests=judged_requests, grid_empty=empties,
+                           verified=verified)
+    except Exception as exc:                # noqa: BLE001
+        log.warning("block alarm failed (%s); continuing with the run", exc)
 
     preview = ranking.select_top(
         accepted, count=prefs.result_count,
