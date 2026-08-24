@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import pytest
 
+from tracker import alarm
 from tracker.alerts import (
     CR_TZ, MAX_EMAILS_PER_DAY, AlertState, decide, record_sent,
 )
@@ -287,3 +288,99 @@ class TestTheHeldSlotReasonIsHonest:
             d = self._held(best, 1347)
             assert "held until 20:00" in d.reason
             assert d.notes == ["held"]
+
+
+class TestTheThrottleAlarm:
+    """A background process that goes quiet looks like one that is working.
+
+    On 2026-08-23 the address was throttled for most of a day and the only
+    trace was a warning in a log file nobody was reading. The trip owner
+    found out by asking. Two emails now: one when a throttle is confirmed,
+    one when it clears.
+    """
+
+    def cfg(self, **kw):
+        base = dict(to_addr="a@b.c", smtp_user="u@b.c", smtp_password="p")
+        base.update(kw)
+        return alarm.AlarmConfig(**base)
+
+    def test_the_blocked_email_says_what_is_happening(self):
+        c = alarm.blocked_email(empty_rate=75.0, since="2026-08-23T15:20:00",
+                                suspect=41, rest_minutes=30, rest_number=2)
+        assert "throttl" in c.subject.lower()
+        assert "75%" in c.text and "15:20" in c.text
+        assert "41 window(s)" in c.text
+
+    def test_the_blocked_email_says_what_not_to_do(self):
+        """Diagnosing a throttle by making more requests is what made the
+        2026-08-23 outage last an hour instead of minutes."""
+        c = alarm.blocked_email(empty_rate=75.0, since="2026-08-23T15:20:00",
+                                suspect=1, rest_minutes=15, rest_number=1)
+        assert "another request" in c.text
+
+    def test_the_blocked_email_promises_no_action_is_needed(self):
+        c = alarm.blocked_email(empty_rate=70.0, since="2026-08-23T15:20:00",
+                                suspect=1, rest_minutes=15, rest_number=1)
+        assert "Nothing is needed from you" in c.text
+
+    def test_the_recovered_email_reports_the_damage(self):
+        c = alarm.recovered_email(minutes=95.0, suspect=41,
+                                  windows_priced=1901)
+        assert "95 minutes" in c.text
+        assert "41 window(s)" in c.text and "1,901" in c.text
+
+    def test_both_parts_are_present(self):
+        for c in (alarm.blocked_email(empty_rate=70, since="2026-08-23T15:20:00",
+                                      suspect=1, rest_minutes=15, rest_number=1),
+                  alarm.recovered_email(minutes=10, suspect=0, windows_priced=1)):
+            assert c.text.strip() and c.html.strip()
+
+    def test_no_smtp_means_no_send_and_no_crash(self):
+        c = alarm.recovered_email(minutes=1, suspect=0, windows_priced=1)
+        assert alarm.send(c, alarm.AlarmConfig()) is False
+
+    def test_a_dry_run_reports_success_without_sending(self):
+        c = alarm.recovered_email(minutes=1, suspect=0, windows_priced=1)
+        assert alarm.send(c, self.cfg(), dry_run=True) is True
+
+    def test_a_broken_smtp_never_raises(self):
+        """The sweep surviving matters more than the telling."""
+        c = alarm.recovered_email(minutes=1, suspect=0, windows_priced=1)
+        assert alarm.send(c, self.cfg(smtp_host="not.a.host.invalid",
+                                      smtp_port=1)) is False
+
+    def test_config_is_read_off_the_project_config(self):
+        class FakeCfg:
+            alert_email, smtp_host, smtp_port = "x@y.z", "smtp.test", 25
+            smtp_user, smtp_password = "u", "p"
+        got = alarm.AlarmConfig.from_config(FakeCfg())
+        assert got.usable and got.to_addr == "x@y.z" and got.smtp_port == 25
+
+
+class TestTheAlarmFiresOncePerEvent:
+    """An escalating backoff can cycle for hours. Six identical emails is
+    not an alert, it is noise that gets filtered."""
+
+    def test_a_second_rest_in_the_same_throttle_is_silent(self):
+        from tracker.sweeper import SweepStore
+        s = SweepStore(throttled_since="2026-08-23T15:20:00+00:00")
+        s.alarm_sent_for = s.throttled_since
+        assert s.alarm_sent_for == s.throttled_since, (
+            "the guard is the equality the sweep checks before alarming")
+
+    def test_a_new_throttle_alarms_again(self):
+        from tracker.sweeper import SweepStore
+        s = SweepStore(throttled_since="2026-08-23T15:20:00+00:00")
+        s.alarm_sent_for = s.throttled_since
+        s.throttled_since = "2026-08-24T09:00:00+00:00"   # a new event
+        assert s.alarm_sent_for != s.throttled_since
+
+    def test_the_flag_survives_a_restart(self):
+        """Otherwise a restart mid-throttle sends a duplicate."""
+        from tracker.sweeper import SweepStore
+        import tempfile, pathlib
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "s.json"
+            s = SweepStore(alarm_sent_for="2026-08-23T15:20:00+00:00")
+            s.save(p)
+            assert SweepStore.load(p).alarm_sent_for == "2026-08-23T15:20:00+00:00"

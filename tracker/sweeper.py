@@ -174,6 +174,10 @@ class SweepStore:
     # harmless; if not, a cheap slow fare can hide below the fold.
     dom_sorted: int = 0
     dom_unsorted: int = 0
+    # Whether the trip owner has already been told about the throttle
+    # currently in progress. Persisted, so a restart mid-throttle does
+    # not send a second alarm about the same event.
+    alarm_sent_for: str = ""
     warm_index: int = 0        # rotation over the schedule-plausible windows
     # key -> {at, empty, healthy}. Every check, not just the finds.
     checked: dict = field(default_factory=dict)
@@ -711,6 +715,7 @@ def sweep_batch(
     hot_share: float = HOT_SHARE,
     save_to: str | Path | None = None,
     should_stop: Callable[[], bool] | None = None,
+    on_alarm: Callable[[str, dict], None] | None = None,
 ) -> int:
     """Price the next `batch` windows, advancing and wrapping the cursor.
 
@@ -916,6 +921,17 @@ def sweep_batch(
                             "(rest #%d). %d window(s) waiting to be re-checked.",
                             stuck_s / 60, rest_for / 60,
                             store.consecutive_rests, len(store.suspect))
+                # Tell the trip owner, once per throttle event. A background
+                # process that goes quiet looks exactly like one that is
+                # working: on 2026-08-23 the address was throttled most of a
+                # day and the only trace was a log line nobody was reading.
+                if on_alarm is not None and store.alarm_sent_for != store.throttled_since:
+                    store.alarm_sent_for = store.throttled_since
+                    on_alarm("blocked", {
+                        "empty_rate": rate, "since": store.throttled_since,
+                        "suspect": len(store.suspect),
+                        "rest_minutes": rest_for / 60,
+                        "rest_number": store.consecutive_rests})
                 stopped = rest_in_slices(sleep, rest_for, should_stop)
                 store.recent.clear()        # judge the next stretch afresh
                 store.throttled_since = ""
@@ -927,9 +943,14 @@ def sweep_batch(
                         "queued for a re-check once it clears.",
                         rate, EMPTY_ALARM_WINDOW, len(store.suspect))
         elif store.throttled_since:
+            minutes = _age_hours(store.throttled_since) * 60
             log.info("Empty rate back to normal after %.0f min; "
-                     "%d window(s) to re-check.",
-                     _age_hours(store.throttled_since) * 60, len(store.suspect))
+                     "%d window(s) to re-check.", minutes, len(store.suspect))
+            if on_alarm is not None and store.alarm_sent_for:
+                on_alarm("recovered", {
+                    "minutes": minutes, "suspect": len(store.suspect),
+                    "windows_priced": store.windows_priced})
+            store.alarm_sent_for = ""
             store.throttled_since = ""
             store.consecutive_rests = 0
 

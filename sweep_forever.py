@@ -39,6 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from tracker import alarm as alarm_mod            # noqa: E402
 from tracker import config as config_mod          # noqa: E402
 from tracker.browser import chrome_path           # noqa: E402
 from tracker.preferences import Preferences, PreferencesError  # noqa: E402
@@ -194,6 +195,26 @@ def main() -> int:
              len(windows) * cycle / 3600.0)
     log.info("Resuming at %s", store.progress(len(windows)))
 
+    alarm_cfg = alarm_mod.AlarmConfig.from_config(cfg, prefs)
+    if not alarm_cfg.usable:
+        log.warning("No SMTP configured, so you will NOT be emailed if Google "
+                    "starts blocking. Run setup_email.py to fix that.")
+    else:
+        log.info("Throttle alarms will be emailed to %s", alarm_cfg.to_addr)
+
+    def raise_alarm(kind: str, facts: dict) -> None:
+        """Best effort. A failed alarm must never stop the sweep."""
+        try:
+            if kind == "blocked":
+                content = alarm_mod.blocked_email(**facts)
+            elif kind == "recovered":
+                content = alarm_mod.recovered_email(**facts)
+            else:
+                return
+            alarm_mod.send(content, alarm_cfg)
+        except Exception as exc:          # noqa: BLE001
+            log.warning("alarm failed (%s); sweeping on", exc)
+
     def announce(d: Discovery) -> None:
         if d.price_usd <= prefs.good_price_usd:
             log.info("*** FOUND %s ***", d.describe())
@@ -215,6 +236,7 @@ def main() -> int:
                 hot_threshold=prefs.good_price_usd,
                 save_to=args.store,
                 should_stop=lambda: _stop,
+                on_alarm=raise_alarm,
             )
         except Exception as exc:            # noqa: BLE001 - must not die
             log.warning("batch failed (%s); pausing 60s", exc)
