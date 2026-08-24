@@ -520,6 +520,82 @@ WARM_SHARE = 0.25          # keeps the ~220 plausible windows fresh daily
 WARM_PAIR_MULTIPLE = 1.15  # a pair qualifies on a fare within this of target
 
 
+# One clean day, defined so it can be checked rather than felt.
+READY_QUIET_HOURS = 24.0
+
+
+def readiness_report(store: "SweepStore", *, throttle_state, hours_since_email,
+                     quiet_hours: float = READY_QUIET_HOURS,
+                     now: datetime | None = None) -> tuple[bool, list[str]]:
+    """Is it safe to raise the sweep rate or the Chrome budget yet?
+
+    The rule this replaces was "do not raise it while the health line
+    reports an empty rate above ~20%", and that number cannot be used any
+    more: the empty rate measures the calendar, which is the whole finding
+    of 2026-08-24. So readiness is judged on things that actually mean
+    something about the connection.
+
+    Returns (ready, lines). Every check is read from files already on disk -
+    **nothing here queries Google.** Asking Google whether it is still
+    refusing is the mistake that turned a short throttle into an hour of
+    one on 2026-08-23.
+    """
+    lines: list[str] = []
+    checks: list[bool] = []
+
+    def check(ok: bool, label: str, detail: str) -> None:
+        checks.append(ok)
+        lines.append(f"  [{'OK ' if ok else 'no '}] {label}: {detail}")
+
+    quiet = _age_hours(store.last_throttle, now) if store.last_throttle else None
+    if quiet is None:
+        check(True, "no throttle on record", "the counter has never fired")
+    else:
+        check(quiet >= quiet_hours,
+              "quiet since the last throttle",
+              f"{quiet:.1f}h of {quiet_hours:.0f}h needed "
+              f"(last {store.last_throttle[:16].replace('T', ' ')} UTC)")
+
+    check(store.consecutive_rests == 0, "not backing off",
+          f"consecutive_rests={store.consecutive_rests}")
+
+    blocked = bool(getattr(throttle_state, "blocked_alarm_sent", False))
+    check(not blocked, "scheduled runs are getting answers",
+          "a blocked alarm is outstanding" if blocked else "no blocked alarm")
+
+    bad = int(getattr(throttle_state, "consecutive_bad", 0))
+    check(bad <= 2, "grid is not degrading", f"consecutive_bad={bad}")
+
+    if hours_since_email is None:
+        check(False, "email is being delivered", "no email has ever been sent")
+    else:
+        check(hours_since_email <= 16.0, "email is being delivered",
+              f"last one {hours_since_email:.1f}h ago")
+
+    timings = sorted(v["secs"] for v in store.checked.values()
+                     if isinstance(v, dict) and "secs" in v
+                     and v.get("blank") is False)
+    if len(timings) < 10:
+        check(True, "pages that return fares are not slowing",
+              f"only {len(timings)} timed samples yet - not judged")
+    else:
+        median = timings[len(timings) // 2]
+        check(median <= 40.0, "pages that return fares are not slowing",
+              f"median {median:.1f}s (9-27s is the measured band)")
+
+    ready = all(checks)
+    lines.append("")
+    if ready:
+        lines.append("READY. Raise ONE thing, then watch a full day before the next:")
+        lines.append("   sweep rate   --delay 90 -> 45 -> 30, one step at a time")
+        lines.append("   Chrome reach hot_list_size 8 -> 18 (fills chrome_max_per_run)")
+        lines.append("Never both at once - if the address complains you want to")
+        lines.append("know which change did it.")
+    else:
+        lines.append("NOT READY. Change nothing yet; the failing lines say why.")
+    return ready, lines
+
+
 def coverage_report(windows: Sequence, store: "SweepStore", *,
                     threshold: int | None, delay_s: float = 90.0) -> list[str]:
     """How often each kind of window is revisited, and what that catches.

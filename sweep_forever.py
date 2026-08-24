@@ -48,7 +48,8 @@ from tracker.preferences import Preferences, PreferencesError  # noqa: E402
 from tracker.schedule import generate_windows     # noqa: E402
 from tracker.sweeper import (                     # noqa: E402
     DEFAULT_STORE, RECHECK_EVERY, Discovery, SweepStore, coverage_report,
-    queue_unverified, sweep_batch, sweep_order, unverified_windows,
+    queue_unverified, readiness_report, sweep_batch, sweep_order,
+    unverified_windows,
 )
 
 log = logging.getLogger("sweep")
@@ -147,6 +148,9 @@ def build_args() -> argparse.Namespace:
     p.add_argument("--coverage", action="store_true",
                    help="how often each kind of window is revisited, and what "
                         "length of price drop that catches")
+    p.add_argument("--readiness", action="store_true",
+                   help="is it safe yet to raise the sweep rate or the "
+                        "Chrome budget? reads files only, never Google")
     p.add_argument("--status", action="store_true",
                    help="print progress and findings, then exit")
     p.add_argument("--log", default="sweep.log",
@@ -168,7 +172,7 @@ def main() -> int:
     # health was unreadable for exactly this reason, while sweep.log still
     # held a previous run's output and looked current. Append, with the date
     # in the file's format, so one file covers the whole history.
-    if args.log and not args.status:
+    if args.log and not (args.status or args.readiness):
         try:
             fh = logging.FileHandler(args.log, encoding="utf-8")
             fh.setFormatter(logging.Formatter(
@@ -193,7 +197,7 @@ def main() -> int:
     # and on 2026-08-24, after a day of restarting to pick up fixes, the
     # store held 459 findings against a MAX_ENTRIES of 400. Harmless in
     # itself, but the cap exists to bound the file and it was not binding.
-    if not args.status:
+    if not (args.status or args.readiness):
         dropped = store.prune()
         if dropped:
             # Persist it. Pruning in memory only would be lost the moment
@@ -206,7 +210,7 @@ def main() -> int:
     # A restart after a gap judges the connection fresh. Without this a
     # sweep stopped while throttled comes straight back up in 4x backoff on
     # yesterday's evidence, and needs two hours of crawling to disprove it.
-    if not args.status and store.forget_stale_health():
+    if not (args.status or args.readiness) and store.forget_stale_health():
         log.info("Idle a while; forgetting the old connection-health "
                  "samples and judging this stretch fresh.")
 
@@ -231,6 +235,18 @@ def main() -> int:
               "within a couple of minutes.")
         print("It is safe to start a new one after that; the cursor resumes.")
         return 0
+
+    if args.readiness:
+        from tracker import alarm as _alarm, throttle as _throttle
+        ready, lines = readiness_report(
+            store,
+            throttle_state=_throttle.ThrottleState.load(cfg.throttle_file),
+            hours_since_email=_alarm.hours_since_last_email(cfg.state_file),
+        )
+        print('\nSafe to raise the rate or the Chrome budget?\n')
+        for line in lines:
+            print(line)
+        return 0 if ready else 1
 
     if args.coverage:
         for line in coverage_report(windows, store,

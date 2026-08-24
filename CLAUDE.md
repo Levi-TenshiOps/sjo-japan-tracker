@@ -278,16 +278,41 @@ the seams around it.
 6. **`describe()` lost an article** - "Depart in next 8 months".
 7. **`included_label` was dead code**, duplicated inline in the wizard.
 
-## Raising the sweep rate
+## Raising the sweep rate, and the Chrome budget
 
 Agreed with the trip owner 2026-08-23: **raise the rate, but only after one
 clean day at 90s.** The table above is the payoff; the risk is that the IP
 is still recovering from the 2026-08-23 throttle, and stepping up into an
 active throttle is what caused it.
 
-The order is 90s -> 45s -> 30s, one step at a time, checking `--status`
-after each. Do not jump straight to 30s, and do not raise it at all while
-the health line reports an empty rate above ~20%.
+The order is 90s -> 45s -> 30s, one step at a time. Do not jump straight
+to 30s.
+
+**"Do not raise it while the health line is above ~20%" is dead.** That
+number was the empty rate, and the empty rate measures the calendar rather
+than the connection - the whole finding of 2026-08-24. Judging readiness
+by it would block the raise on November having few flights.
+
+`sweep_forever.py --readiness` answers it instead, from files already on
+disk and **without a single request to Google** - asking Google whether it
+is still refusing is what turned a short throttle into an hour of one. It
+exits 0 when ready, 1 when not, and prints the failing line:
+
+    [OK ] quiet since the last throttle: 26.1h of 24h needed
+    [OK ] not backing off: consecutive_rests=0
+    [OK ] scheduled runs are getting answers: no blocked alarm
+    [OK ] grid is not degrading: consecutive_bad=2
+    [OK ] email is being delivered: last one 3.2h ago
+    [OK ] pages that return fares are not slowing: median 15.5s
+
+The second raise available is `hot_list_size` 8 -> 18, which fills
+`chrome_max_per_run` instead of leaving half of it unspent (see "Chrome
+does not spend its budget" above). It is the same kind of decision and
+takes the same gate.
+
+**Raise one thing, then watch a full day before the next.** Never both at
+once: if the address starts complaining you want to know which change did
+it.
 
 ## What makes Google block you, in order of importance
 
