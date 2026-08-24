@@ -156,3 +156,36 @@ class TestEverySettingActuallyDoesSomething:
                          "deep_sweep_top_windows: 3\n", encoding="utf-8")
             cfg = load(p, use_env=False)
             assert cfg.origins == ["SJO"]
+
+
+class TestTheTimezoneDatabaseIsADeclaredDependency:
+    """The two-emails-a-day budget is keyed on Costa Rican local time.
+
+    Found 2026-08-23 when the venv was rebuilt from a clean interpreter:
+    every timezone-aware test became a collection error with
+    "ZoneInfoNotFoundError: 'No time zone found with key America/Costa_Rica'".
+
+    Linux ships a system tzdb so CI has never needed `tzdata` and never
+    will, which is precisely why nothing caught it. Windows ships none, and
+    Windows is the only machine that actually runs the tracker. It had been
+    arriving as somebody else's transitive dependency - the mirror image of
+    the typing_extensions bug, which was green locally and red in CI.
+    """
+
+    def test_the_costa_rica_zone_resolves(self):
+        from zoneinfo import ZoneInfo
+        assert ZoneInfo("America/Costa_Rica") is not None
+
+    def test_alerts_can_be_imported_and_knows_the_zone(self):
+        from tracker.alerts import CR_TZ
+        from datetime import datetime
+        assert datetime(2026, 8, 23, 20, 0, tzinfo=CR_TZ).utcoffset() is not None
+
+    def test_tzdata_is_pinned_in_requirements(self):
+        """The runtime checks above pass on Linux without it. This does not."""
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parent.parent
+        reqs = (root / "requirements.txt").read_text(encoding="utf-8")
+        assert "tzdata" in reqs, (
+            "tzdata must be declared: Windows has no system timezone "
+            "database, and zoneinfo falls back to this package")

@@ -213,9 +213,17 @@ def decide(
         return AlertDecision(
             False,
             (
-                f"${best_price:,} beats the ${prev:,} already sent, but the "
-                f"last email slot is being held until {last_call_hour}:00 in "
-                f"case something cheaper appears"
+                # Do not claim an improvement that did not happen. In digest
+                # mode every run reaches this branch whatever the price did,
+                # so on 2026-08-23 the 18:06 run logged "$1,390 beats the
+                # $1,347 already sent" - plainly false, and enough to send
+                # anyone reading the log hunting for a ranking bug. The held
+                # slot is the reason either way; the price is not.
+                (f"${best_price:,} beats the ${prev:,} already sent"
+                 if best_price < prev else
+                 f"${best_price:,} is no better than the ${prev:,} already sent")
+                + f", but the last email slot is being held until "
+                  f"{last_call_hour}:00 in case something cheaper appears"
             ),
             is_great=is_great,
             remaining_today=remaining,

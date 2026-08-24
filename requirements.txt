@@ -16,3 +16,20 @@ primp>=0.6
 # clean runner while every local checkout was fine, because locally it had
 # arrived as somebody else's transitive dependency.
 typing_extensions>=4.0
+
+# The IANA timezone database. `alerts.py` and `cli.py` both do
+# ZoneInfo("America/Costa_Rica"), and the whole two-emails-a-day budget is
+# keyed on Costa Rican local time.
+#
+# Linux ships a system tzdb, so CI has never needed this and never will -
+# which is exactly why it went unnoticed. Windows ships none, and `zoneinfo`
+# falls back to this package. Rebuilding the venv on 2026-08-23 turned every
+# timezone-aware test into a collection error:
+#
+#     ZoneInfoNotFoundError: 'No time zone found with key America/Costa_Rica'
+#
+# It had been arriving as somebody else's transitive dependency, the same
+# way typing_extensions did above. This is the mirror image of that bug:
+# there it was green locally and red in CI, here it is green in CI and red
+# on the only machine that actually runs the tracker.
+tzdata>=2024.1

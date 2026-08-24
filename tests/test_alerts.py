@@ -250,3 +250,40 @@ class TestCheapestWinsTheLastSlot:
             hours=(6, 9, 12, 15, 18, 21))
         assert len(sent) == 2
         assert sent[-1] == 1090
+
+
+class TestTheHeldSlotReasonIsHonest:
+    """The log line must not claim an improvement that did not happen.
+
+    Found in the live log 2026-08-23: the 18:06 run wrote "$1,390 beats the
+    $1,347 already sent, but the last email slot is being held". $1,390 does
+    not beat $1,347. The branch was written assuming it is only reached when
+    the fare improved, which is true with the price threshold gating
+    delivery and false in digest mode, where every run reaches it.
+    """
+
+    def _held(self, best, prev):
+        st = AlertState(day="2026-08-23", emails_sent_today=1,
+                        last_best_price=prev, last_signature="old",
+                        last_email_at="2026-08-23T12:38:32+00:00")
+        return decide(st, best_price=best, best_signature="new",
+                      good_threshold=1400, great_threshold=1150,
+                      now=datetime(2026, 8, 23, 18, 6, tzinfo=CR_TZ),
+                      always_send=True, reserve_last_slot=True,
+                      last_call_hour=20)
+
+    def test_a_dearer_fare_is_not_described_as_beating(self):
+        d = self._held(1390, 1347)
+        assert not d.should_send and "held" in d.notes
+        assert "beats" not in d.reason, d.reason
+        assert "no better" in d.reason
+
+    def test_a_genuinely_cheaper_fare_still_says_beats(self):
+        d = self._held(1200, 1347)
+        assert "beats" in d.reason, d.reason
+
+    def test_either_way_the_slot_is_held_for_the_same_reason(self):
+        for best in (1200, 1390):
+            d = self._held(best, 1347)
+            assert "held until 20:00" in d.reason
+            assert d.notes == ["held"]
