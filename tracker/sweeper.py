@@ -827,6 +827,7 @@ def sweep_batch(
                 store.dropped_rechecks += 1
                 continue
             replay = True
+            is_recheck = True
         else:
             # Hot windows are re-priced out of turn and must not consume the
             # cold cursor, or coverage would stall on the cheap ones.
@@ -840,6 +841,7 @@ def sweep_batch(
             if w is None:
                 break
             replay = was_hot
+            is_recheck = False
 
         depart, ret = w.depart, w.back
         url = _search_url(origin, destination, depart, ret, max_stops)
@@ -940,7 +942,13 @@ def sweep_batch(
         # cursor had walked into November Saturdays, which carry no Zurich
         # routing at all (0 of 58 measured), while the warm picks in the same
         # minutes were getting 16 results each.
-        if not replay:
+        # Exclude *re-checks* only. Hot and warm picks are fresh queries to
+        # Google and are perfectly good evidence about the connection - the
+        # first version of this guard keyed off `replay`, which is also true
+        # for them, so the sample collapsed to cold picks alone. With the
+        # cold cursor grinding through November Saturdays that read as 100%
+        # empty while hot picks in the same minutes were getting 17 results.
+        if not is_recheck:
             store.recent.append(0 if parsed else 1)
             del store.recent[:-EMPTY_ALARM_WINDOW * 2]
         throttled = looks_throttled(store.recent)

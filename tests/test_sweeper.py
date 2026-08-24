@@ -1687,6 +1687,29 @@ class TestReChecksDoNotPoisonTheHealthSample:
     `recent` measures the connection, so only a fresh pick is evidence.
     """
 
+    def test_hot_and_warm_picks_still_count_as_evidence(self, dom):
+        """They are fresh queries to Google, so they are evidence about it.
+
+        The first version of this guard keyed off `replay`, which is also
+        true for hot and warm picks, so the health sample collapsed to cold
+        picks alone. With the cold cursor grinding through November
+        Saturdays that read as 100% empty while hot picks in the very same
+        minutes were logging "Google claims 17 results".
+        """
+        s = SweepStore()
+        ws = windows(40)
+        # Seed a finding so a hot list exists and hot picks actually happen.
+        s.found[ws[0].key] = {
+            "depart": ws[0].depart.isoformat(), "ret": ws[0].back.isoformat(),
+            "price_usd": 1347, "origin": "SJO", "destination": "TYO",
+            "stops": ["ZRH"], "airlines": ["SWISS"], "total_minutes": 2780,
+            "deep_link": "", "seen_at": datetime.now(timezone.utc).isoformat()}
+        sweep_batch(ws, s, batch=20, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0, hot_share=0.25)
+        assert len(s.recent) == s.windows_priced, (
+            "with no re-checks queued, every priced window is fresh evidence "
+            "and all of them should be in the health sample")
+
     def test_a_recheck_does_not_count_as_evidence(self):
         """Fewer health samples than windows priced: the difference is the
         re-checks, which are not evidence about the connection."""
