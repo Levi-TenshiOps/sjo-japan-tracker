@@ -1388,10 +1388,16 @@ the metro-code, max-stops, max-stay and OSA questions are all settled above.
       09:03 on 2026-08-23 with exit code 0. The others showed result
       `267011` = `SCHED_S_TASK_HAS_NOT_RUN`, which is "not yet", not a
       failure - they were installed after their slot had passed.
-- [ ] Confirm a scheduled run's *contents*, now that `tracker.log` exists.
-      Until 2026-08-23 `tracker.cli` wrote no log file at all, so a run's
-      only trace was its exit code and there was no way to tell a run that
-      emailed from one that silently found nothing.
+- [x] Confirm a scheduled run's *contents*, now that `tracker.log` exists.
+      Done 2026-08-24: FlightTracker4 at 15:45, exit 0, audited line by
+      line. Wide net 2 hints from 18 requests (December $1,438); grid 3
+      usable from 8 requests at 75% empty, budget held at 8; Chrome
+      verified 7 windows and confirmed **$1,347 on 2027-01-29 +27n** and a
+      second $1,347 on **2027-01-22 +30n**; sweep contributed 12 windows;
+      40 rows logged, 37 from Chrome; alert price taken from Chrome
+      ($1,347) over the grid ($1,641); email correctly *held* for the
+      20:00 slot rather than spent. The new block alarm stayed silent,
+      which is right - Chrome answered on 6 of 7 launches.
 - [ ] Watch a week; check `throttle.json` settled somewhere sensible
 - [x] Decide the alert thresholds. Done: `preferences.json` now holds
       `good_price_usd: 1400`, `great_price_usd: 1150`, which matches the
