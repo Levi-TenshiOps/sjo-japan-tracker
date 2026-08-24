@@ -256,20 +256,36 @@ class SweepStore:
 
     # -- contents ----------------------------------------------------------
     def record(self, option: BrowserOption) -> bool:
-        """Keep this option if it is the best yet for its window.
+        """Record the latest price for this window.
 
-        Returns True when the store changed, so the caller can decide
-        whether the find is worth logging.
+        `found` answers "what can be booked on this date now", not "what
+        was the best this date ever showed" - the all-time low lives in
+        `sweep_history.csv`, which is append-only and never rewritten.
+
+        That distinction used to be wrong in the one direction that
+        matters. A dearer sighting kept the old, lower price *and*
+        refreshed its timestamp, so the email went on advertising a fare
+        the market no longer had and labelled it "checked 20 min ago".
+        Measured against the live store on 2026-08-24: 14 of the 48
+        windows priced more than once were showing a price a later check
+        had not found. The gaps were $10-12 there, but nothing bounds
+        them - a $1,347 window rising to $2,000 would have gone on
+        claiming $1,347, freshly checked, and that is the headline number
+        the trip owner acts on.
+
+        Refreshing the timestamp on an *equal* price is still right, and
+        is why this is not simply "keep the minimum": a fare the sweep
+        keeps re-confirming must not age out of the email.
+
+        Returns True only when the price actually improved, so `on_find`
+        still fires on news rather than on every re-check.
         """
         d = Discovery.from_option(option)
         prev = self.found.get(d.key)
-        if prev is not None and int(prev.get("price_usd", 10 ** 9)) <= d.price_usd:
-            # Not cheaper, but refresh the timestamp so a still-valid fare
-            # does not age out of the email while the sweep keeps seeing it.
-            prev["seen_at"] = d.seen_at
-            return False
         self.found[d.key] = asdict(d)
-        return True
+        if prev is None:
+            return True
+        return d.price_usd < int(prev.get("price_usd", 10 ** 9))
 
     def forget_stale_health(self, *, max_idle_hours: float = 0.5,
                             now: datetime | None = None) -> bool:

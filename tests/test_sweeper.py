@@ -98,11 +98,30 @@ class TestRecording:
         assert s.record(opt(1200)) is True
         assert s.found["2027-01-29_2027-02-25"]["price_usd"] == 1200
 
-    def test_dearer_does_not_replace(self):
+    def test_dearer_replaces_because_the_old_fare_is_gone(self):
+        """`found` is what is bookable now, not the all-time low.
+
+        This asserted the opposite until 2026-08-24, and the old
+        behaviour was worse than untidy: a dearer sighting kept the old
+        price *and* refreshed its timestamp, so the email advertised a
+        fare the market no longer had and called it freshly checked.
+        Measured against the live store, 14 of the 48 windows priced more
+        than once were doing exactly that.
+
+        The all-time low is not lost - `sweep_history.csv` is append-only
+        and keeps every observation.
+        """
         s = SweepStore()
         s.record(opt(1200))
-        assert s.record(opt(1500)) is False
-        assert s.found["2027-01-29_2027-02-25"]["price_usd"] == 1200
+        assert s.record(opt(1500)) is False, "a rise is not a new find"
+        assert s.found["2027-01-29_2027-02-25"]["price_usd"] == 1500
+
+    def test_a_rise_does_not_fire_the_discovery_callback(self):
+        """`on_find` is for news worth emailing, and a rise is not that."""
+        s = SweepStore()
+        s.record(opt(1200))
+        assert s.record(opt(1201)) is False
+        assert s.record(opt(1199)) is True
 
     def test_reseeing_the_same_price_refreshes_the_timestamp(self):
         """Otherwise a live fare ages out of the email while still on sale."""

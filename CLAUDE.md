@@ -1089,6 +1089,83 @@ The March figure is the same trap in miniature: `2027-03-14 -> 2027-04-13`
 returns in April, so it is a pre-`whole_trip_in_searched_months`
 observation. The current window list contains 0 such windows - checked.
 
+## The email could advertise a fare the market no longer had
+
+Found 2026-08-24 while auditing for anything that could mislead the trip
+owner about the best deal. This one could, directly, on the headline
+number.
+
+`SweepStore.record` kept the cheapest price ever seen for a window. When a
+later check came back dearer it kept the old, lower price **and refreshed
+its timestamp** - so the fare never aged out of the email and was labelled
+"checked 20 min ago". The comment explained the timestamp refresh as
+stopping a still-valid fare ageing out, which is right for an *equal*
+price and wrong for a dearer one.
+
+Measured against the live store: of the 48 windows priced more than once,
+**14 were showing a price a later check had not found**. The gaps were
+$10-12, because the re-priced windows are mostly hot ones that move
+little - but nothing bounds them. A $1,347 window rising to $2,000 would
+have gone on claiming $1,347, freshly checked.
+
+`found` now answers "what can be booked on this date now". The all-time
+low is not lost: `sweep_history.csv` is append-only and keeps every
+observation, which is where the baseline and every analysis in this file
+come from. Re-seeing the *same* price still refreshes the timestamp.
+
+`record()` still returns True only on an improvement, so `on_find` fires
+on news rather than on every re-check.
+
+## Two measurement bugs in the throttle detector's own inputs
+
+Both found 2026-08-24, both in what `elapsed` and the ledger actually
+measured rather than in the thresholds - which stay frozen, as agreed.
+
+**The clock was timing the queue, not the fetch.** `started` was read
+before `gate.google()`, so the sweep charged Google for its own wait on
+the lock. The scheduled runs hold that lock for their whole Chrome phase,
+about four minutes, six times a day, and the sweep queues behind them by
+design - roughly 18 windows a day. The live ledger had one window at
+**216.5s**, when no fetch can outlive its 120s timeout and no page that
+returned fares has ever taken more than 26.8s.
+
+Wrong in both directions, and the second is the dangerous one:
+
+* a throttled page that had queued looked slow, so the detector missed it
+  *precisely* when a scheduled run was also hitting Google;
+* the same window was then stamped `healthy` - "genuinely empty,
+  trusted" - and so never went back in the re-check queue.
+
+The clock now starts inside the lock. A fetch that raised produces no
+timing and is excluded from the health sample rather than counted as
+evidence of a healthy connection.
+
+**The ledger recorded the visa filter, not the page.** `checked[k]["empty"]`
+was `not options`, i.e. "nothing this passport can use". That is the exact
+conflation behind the 70% false alarm; the health sample was fixed that
+day and this field was not - and it is what a later re-calibration reads.
+It made the first calibration report 46 empty pages when 10 of them had
+returned fares the visa rule removed. `blank` (`not parsed`) is now
+recorded beside it.
+
+### First honest calibration of SUSPECT_FAST_SECONDS
+
+n=110 checks, timings measured on the fetch alone:
+
+    pages WITH fares    min 9.0s   p10 10.4s   median 15.5s   max 26.8s
+    pages with none     29 in 2.0-4.5s,  6 in 4.5-7.0s,  0 in 7-15s
+
+Cleanly bimodal, with an empty band between about 7s and 9s. **No page
+that returned fares has ever come back in under 9.0 seconds**, so the
+4.5s threshold has 4.5s of headroom and produces zero false positives -
+but six genuinely fast empties sit just above it and are not being
+counted.
+
+So the observed boundary is nearer **7s** than 4.5s. The detector stays
+frozen per the agreement above; this is the data that a later change
+should be made from, not a change. Re-run it once `secs` covers a day or
+two rather than an afternoon.
+
 ## Layout
 
 ```
