@@ -130,7 +130,8 @@ class Discovery:
             depart_date=Date.fromisoformat(self.depart),
             return_date=Date.fromisoformat(self.ret),
             stops=tuple(self.stops), airlines=tuple(self.airlines),
-            total_minutes=self.total_minutes, deep_link=self.deep_link)
+            total_minutes=self.total_minutes, deep_link=self.deep_link,
+            checked_at=self.seen_at)
 
     @classmethod
     def from_option(cls, o: BrowserOption) -> "Discovery":

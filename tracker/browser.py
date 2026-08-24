@@ -98,6 +98,16 @@ class BrowserOption:
     airlines: tuple[str, ...]
     total_minutes: int
     deep_link: str = ""
+    # When this price was actually observed, ISO-8601, or blank for one
+    # checked during the current run.
+    #
+    # The email merges fares verified minutes ago with findings the
+    # background sweep made up to `sweep_max_age_hours` (10) ago, sorts them
+    # together and puts a "book" link on every row. Without this they are
+    # indistinguishable, so the reader cannot tell a live price from one
+    # observed before breakfast - which is the "lie by omission" the age cap
+    # exists to prevent, just at a ten-hour granularity instead of a day.
+    checked_at: str = ""
 
     @property
     def nights(self) -> int:

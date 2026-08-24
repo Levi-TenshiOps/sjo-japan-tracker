@@ -268,3 +268,71 @@ class TestRankedList:
     def test_fewer_than_ten_available_shows_all(self):
         shown = rank_for_email(self._spread(4), threshold=1380)[0].items
         assert len(shown) == 4
+
+
+from dataclasses import replace                        # noqa: E402
+from tracker.browser import BrowserOption                # noqa: E402
+from tracker.email_render import (                       # noqa: E402
+    checked_ago, verified_block_html, verified_block_text,
+)
+
+
+class TestSweptFaresAreMarkedWithTheirAge:
+    """A price checked nine hours ago must not look like a live one.
+
+    Found 2026-08-23. `cli.run` does `verified = sorted(verified + fresh)`,
+    merging fares Chrome checked minutes ago with sweep findings up to
+    `sweep_max_age_hours` (10) old, then puts a "See & book" link on every
+    row. Nothing distinguished them, which is the "lie by omission" the age
+    cap exists to prevent - only at a ten-hour granularity instead of a day.
+    """
+
+    def opt(self, minutes_ago=None, price=1347):
+        from datetime import datetime, timedelta, timezone
+        stamp = ""
+        if minutes_ago is not None:
+            stamp = (datetime.now(timezone.utc)
+                     - timedelta(minutes=minutes_ago)).isoformat()
+        return BrowserOption(
+            price_usd=price, origin="SJO", destination="TYO",
+            depart_date=date(2027, 1, 29), return_date=date(2027, 2, 25),
+            stops=("ZRH",), airlines=("SWISS",), total_minutes=2780,
+            deep_link="https://x.test", checked_at=stamp)
+
+    def test_a_fare_verified_this_run_says_nothing(self):
+        assert checked_ago(self.opt(minutes_ago=None)) == ""
+
+    def test_a_recent_check_reads_as_just_checked(self):
+        assert checked_ago(self.opt(minutes_ago=3)) == "just checked"
+
+    def test_minutes_then_hours(self):
+        assert checked_ago(self.opt(minutes_ago=40)) == "checked 40 min ago"
+        assert checked_ago(self.opt(minutes_ago=9 * 60)) == "checked 9 hr ago"
+
+    def test_a_malformed_stamp_is_silent_not_fatal(self):
+        o = self.opt(minutes_ago=1)
+        o = replace(o, checked_at="not a date")
+        assert checked_ago(o) == ""
+
+    def test_the_age_reaches_the_html(self):
+        html = verified_block_html([self.opt(minutes_ago=9 * 60)], threshold=1400)
+        assert "checked 9 hr ago" in html
+
+    def test_the_age_reaches_the_plain_text(self):
+        lines = verified_block_text([self.opt(minutes_ago=9 * 60)], threshold=1400)
+        assert any("checked 9 hr ago" in l for l in lines)
+
+    def test_a_this_run_fare_is_not_annotated(self):
+        """The block's own blurb says "re-checked the slow way", so match
+        the age phrasing rather than the bare word."""
+        html = verified_block_html([self.opt(minutes_ago=None)], threshold=1400)
+        for phrase in ("just checked", "min ago", "hr ago"):
+            assert phrase not in html, phrase
+
+    def test_the_sweep_store_carries_the_timestamp_through(self):
+        """Discovery -> BrowserOption must not drop it on the floor."""
+        from tracker.sweeper import Discovery
+        d = Discovery(depart="2027-01-29", ret="2027-02-25", price_usd=1347,
+                      stops=["ZRH"], airlines=["SWISS"], total_minutes=2780,
+                      seen_at="2026-08-23T08:00:00+00:00")
+        assert d.to_option().checked_at == "2026-08-23T08:00:00+00:00"

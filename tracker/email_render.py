@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date as Date
+from datetime import datetime, timezone
 from html import escape as _escape
 
 
@@ -602,6 +603,34 @@ def render_text(
     return "\n".join(lines)
 
 
+def checked_ago(option, now=None) -> str:
+    """"checked 6 hr ago" for a swept fare, "" for one verified this run.
+
+    The verified block sorts this-run Chrome results together with sweep
+    findings up to `sweep_max_age_hours` (10) old, then puts a book link on
+    every row. Without this the reader cannot tell a price checked minutes
+    ago from one that was true before breakfast - which is exactly the "lie
+    by omission" the age cap exists to prevent, only at a ten-hour
+    granularity rather than a day.
+    """
+    stamp = getattr(option, "checked_at", "") or ""
+    if not stamp:
+        return ""
+    try:
+        seen = datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
+        return ""
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    mins = int((now - seen).total_seconds() / 60)
+    if mins < 15:
+        return "just checked"
+    if mins < 90:
+        return f"checked {mins} min ago"
+    return f"checked {round(mins / 60)} hr ago"
+
+
 def verified_block_html(verified, threshold: int) -> str:
     """The Chrome-verified fares, above everything else in the email.
 
@@ -615,6 +644,8 @@ def verified_block_html(verified, threshold: int) -> str:
     rows = []
     for o in verified[:6]:
         hrs, mins = divmod(o.total_minutes, 60)
+        ago = checked_ago(o)
+        age_txt = f" · {ago}" if ago else ""
         under = o.price_usd <= threshold
         colour = GREEN if under else INK
         # The link is price-capped, so it opens on this fare rather than a
@@ -631,7 +662,8 @@ def verified_block_html(verified, threshold: int) -> str:
             f'{escape(o.route_label)}<br>'
             f'<span style="color:{MUTED};">{escape(str(o.depart_date))} to '
             f'{escape(str(o.return_date))} &middot; {o.nights} nights &middot; '
-            f'{hrs} hr {mins} min &middot; {escape(", ".join(o.airlines))}</span></td>'
+            f'{hrs} hr {mins} min &middot; {escape(", ".join(o.airlines))}'
+            f'{escape(age_txt)}</span></td>'
             f'<td style="padding:8px 0;font:400 13px/1.5 {FONT};text-align:right;">'
             f'{link}</td></tr>')
     return (
@@ -653,8 +685,10 @@ def verified_block_text(verified, threshold: int) -> list[str]:
         hrs, mins = divmod(o.total_minutes, 60)
         flag = "  <-- under your threshold" if o.price_usd <= threshold else ""
         lines.append(f"{format_price(o.price_usd)}  {o.route_label}{flag}")
+        ago = checked_ago(o)
         lines.append(f"    {o.depart_date} to {o.return_date} ({o.nights}n), "
-                     f"{hrs} hr {mins} min, {', '.join(o.airlines)}")
+                     f"{hrs} hr {mins} min, {', '.join(o.airlines)}"
+                     + (f", {ago}" if ago else ""))
         if o.deep_link:
             lines.append(f"    See & book: {o.deep_link}")
     lines.append("")

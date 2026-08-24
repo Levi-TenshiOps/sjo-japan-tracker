@@ -370,6 +370,58 @@ one extra concurrent request, and the throttle detection catches the
 latter. Stale locks - dead PID, or no heartbeat for ten minutes - are
 broken rather than waited out.
 
+## The 15-round audit, 2026-08-23
+
+Run after the trip owner spotted that a 31 March departure could not come
+home inside the searched months and asked, reasonably, what else was wrong.
+Eight real defects. Rounds that found nothing are listed too, so nobody
+re-walks them.
+
+**Found and fixed**
+
+1. **One-way queries were possible.** A bare date in `config.yaml` parses to
+   `(depart, None)` and `search.build_query` turns that into
+   `trip="one-way"` silently. A one-way fare is about half the round trip it
+   would sit beside, so it would have read as the best deal ever found.
+   Config refuses it now.
+2. **The visa deny list had 50 holes, and silence meant yes.** `ban_reason`
+   was a pure deny list, so any airport nobody had added came back clean -
+   including Anchorage and Fairbanks. Unknown codes are rejected now, which
+   makes both call sites fail closed. That inversion required the allow list
+   to be honest, which surfaced MTY, PVR, SAL and LIR (Costa Rica's own
+   second airport) passing only because nothing banned them.
+4. **The priority quota could hide the cheapest fare.** 390 of 3,000 random
+   selections lost it. Safe at the live settings, not safe at
+   `result_count: 1` or `priority_share: 1.0`, both of which validation
+   allows. `select_top` now guarantees it.
+6. **The price bands were calibrated on fares you cannot book.** The SEED
+   came from a Google digest, carrying the exact population bias that
+   demoted the GOOGLE source. $1,347 - the best fare in eight months - was
+   classified TYPICAL. Recalibrated to visa-free percentiles, and the email
+   stopped claiming the median was "what travellers usually pay".
+11. **`max_total_hours` did nothing on the Chrome path**, which is the path
+    that decides the alert price.
+12. **`max_requests_per_run` did nothing at all**, while describing itself
+    as the ceiling. Two other config knobs were read by nothing and are
+    gone. A test now walks every field.
+14. **Swept fares looked live.** The email merged prices checked minutes ago
+    with sweep findings up to ten hours old, book link on every row, nothing
+    to tell them apart. They carry "checked 9 hr ago" now.
+
+**Checked and clean** - 3 duration/layover arithmetic (the `0 < gap` guard
+reads like a fail-open but the boundary is skipped a line above), 5 the
+alert budget over 80 simulated days, 7 the Chrome DOM parser, 8 cursor
+resume under a shifting window list, 9 booking links, 10 link dates
+matching their row, 13 preferences knobs, 15 an end-to-end render audited
+claim by claim.
+
+**The pattern worth remembering.** Six of the eight were the same shape: a
+rule that existed and was enforced in one place but not in the parallel
+path. The grid enforced the duration cap and Chrome did not; validation
+enforced round trips for the return date but not its absence; the deny list
+covered the airports someone had thought of. When adding a rule, grep for
+every path that should obey it.
+
 ## Layout
 
 ```
