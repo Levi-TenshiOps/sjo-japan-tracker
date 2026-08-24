@@ -1465,3 +1465,144 @@ class TestCoverageIsReportable:
     def test_it_survives_an_empty_store(self):
         assert sweeper.coverage_report(windows(10), SweepStore(),
                                        threshold=1400)
+
+
+class TestTheAlarmIsActuallyWiredUp:
+    """The email builders had tests; the wiring did not.
+
+    That is the half that breaks - `AlarmConfig.from_config` was already
+    found sending to nobody because the sweep never passed `prefs`. These
+    drive the real `sweep_batch` path rather than the pieces.
+    """
+
+    def _throttled_store(self):
+        s = SweepStore()
+        # Long enough ago that the rest branch is taken immediately.
+        s.throttled_since = "2020-01-01T00:00:00+00:00"
+        s.recent = [1] * 40
+        return s
+
+    def test_a_throttle_raises_the_blocked_alarm(self):
+        fired = []
+        s = self._throttled_store()
+        sweep_batch(windows(40), s, batch=30, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0,
+                    on_alarm=lambda k, f: fired.append((k, f)))
+        assert [k for k, _ in fired].count("blocked") == 1
+
+    def test_it_carries_the_facts_the_email_needs(self):
+        """A missing key would raise inside the alarm and be swallowed."""
+        from tracker import alarm
+        fired = []
+        s = self._throttled_store()
+        sweep_batch(windows(40), s, batch=30, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0,
+                    on_alarm=lambda k, f: fired.append((k, f)))
+        kind, facts = fired[0]
+        alarm.blocked_email(**facts)          # must not raise
+
+    def test_it_does_not_re_alarm_for_the_same_throttle(self):
+        """An escalating backoff cycles for hours; one email, not six."""
+        fired = []
+        s = self._throttled_store()
+        for _ in range(4):
+            sweep_batch(windows(40), s, batch=25, fetch=FakeChrome(""),
+                        sleep=lambda _: None, delay_s=0,
+                        on_alarm=lambda k, f: fired.append((k, f)))
+        assert [k for k, _ in fired].count("blocked") == 1, [k for k, _ in fired]
+
+    def test_recovery_raises_the_all_clear(self, dom):
+        from tracker import alarm
+        fired = []
+        s = SweepStore()
+        s.throttled_since = "2020-01-01T00:00:00+00:00"
+        s.alarm_sent_for = s.throttled_since       # already told them
+        s.recent = [0] * 40                        # healthy again
+        sweep_batch(windows(5), s, batch=2, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0,
+                    on_alarm=lambda k, f: fired.append((k, f)))
+        kinds = [k for k, _ in fired]
+        assert "recovered" in kinds, kinds
+        alarm.recovered_email(**dict(fired[0][1]))     # must not raise
+        assert s.alarm_sent_for == "", "the flag must reset for the next event"
+
+    def test_a_second_throttle_alarms_again(self, dom):
+        """Resetting the flag is what makes the next outage reportable."""
+        s = SweepStore()
+        s.throttled_since = "2020-01-01T00:00:00+00:00"
+        s.alarm_sent_for = s.throttled_since
+        s.recent = [0] * 40
+        sweep_batch(windows(5), s, batch=2, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0,
+                    on_alarm=lambda k, f: None)
+        fired = []
+        s2 = self._throttled_store()
+        sweep_batch(windows(40), s2, batch=25, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0,
+                    on_alarm=lambda k, f: fired.append((k, f)))
+        assert [k for k, _ in fired].count("blocked") == 1
+
+    def test_an_exploding_alarm_never_stops_the_sweep(self):
+        """The sweep surviving matters more than the telling."""
+        def boom(kind, facts):
+            raise RuntimeError("smtp on fire")
+        s = self._throttled_store()
+        priced = sweep_batch(windows(40), s, batch=10, fetch=FakeChrome(""),
+                             sleep=lambda _: None, delay_s=0, on_alarm=boom)
+        assert priced > 0, "an alarm failure took the sweep down with it"
+
+    def test_no_callback_is_simply_silent(self):
+        s = self._throttled_store()
+        assert sweep_batch(windows(40), s, batch=10, fetch=FakeChrome(""),
+                           sleep=lambda _: None, delay_s=0) > 0
+
+
+class TestNoInjectedCallbackCanStopTheSweep:
+    """None of them does anything the sweep depends on.
+
+    Found 2026-08-24 by an integration test on the alarm, then found twice
+    more by asking the obvious follow-up: `on_find` and `should_stop` were
+    unguarded too. Either would abort the batch, and the outer loop then
+    pauses 60 seconds and loses the remaining windows.
+
+    `on_find` is the realistic one: it formats a Discovery built from
+    scraped data, so a malformed date is all it takes.
+    """
+
+    def boom(self, *args):
+        raise RuntimeError("callback on fire")
+
+    def test_on_find_cannot_stop_it(self, dom):
+        s = SweepStore()
+        assert sweep_batch(windows(6), s, batch=4, fetch=FakeChrome(dom),
+                           sleep=lambda _: None, delay_s=0,
+                           on_find=self.boom) == 4
+
+    def test_should_stop_cannot_stop_it_by_raising(self, dom):
+        """A raising stop-check must not read as 'stop', nor as fatal."""
+        s = SweepStore()
+        assert sweep_batch(windows(6), s, batch=4, fetch=FakeChrome(dom),
+                           sleep=lambda _: None, delay_s=0,
+                           should_stop=self.boom) == 4
+
+    def test_on_alarm_cannot_stop_it(self):
+        s = SweepStore()
+        s.throttled_since = "2020-01-01T00:00:00+00:00"
+        s.recent = [1] * 40
+        assert sweep_batch(windows(40), s, batch=10, fetch=FakeChrome(""),
+                           sleep=lambda _: None, delay_s=0,
+                           on_alarm=self.boom) > 0
+
+    def test_findings_are_still_recorded_when_on_find_explodes(self, dom):
+        """The callback is for telling somebody; the data is the point."""
+        s = SweepStore()
+        sweep_batch(windows(4), s, batch=4, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0, on_find=self.boom)
+        assert s.found, "a broken notifier lost the fares it was notifying about"
+
+    def test_a_working_callback_still_gets_called(self, dom):
+        seen = []
+        s = SweepStore()
+        sweep_batch(windows(4), s, batch=4, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0, on_find=seen.append)
+        assert seen, "the guard must not swallow the call itself"

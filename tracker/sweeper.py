@@ -691,6 +691,48 @@ def rest_in_slices(sleep: Callable[[float], None], seconds: float,
     return should_stop()
 
 
+def _safe_call(fn, *args, what: str = "callback", default=None):
+    """Run an injected callback without letting it end the sweep.
+
+    Audited 2026-08-24 after an integration test caught the alarm doing
+    exactly this: `on_find` and `should_stop` were both unguarded too, and
+    either would abort the batch and cost the outer loop a 60-second pause
+    plus the remaining windows.
+
+    `on_find` is the realistic one - it formats a `Discovery` built from
+    scraped data, so a malformed date is all it takes. None of these
+    callbacks does anything the sweep depends on, which is precisely why
+    none of them should be able to stop it.
+    """
+    if fn is None:
+        return default
+    try:
+        return fn(*args)
+    except Exception as exc:              # noqa: BLE001
+        log.warning("%s failed (%s); sweeping on", what, exc)
+        return default
+
+
+def _safe_alarm(on_alarm, kind: str, facts: dict) -> None:
+    """Raise an alarm without letting it take the sweep down.
+
+    `sweep_forever` wraps its own callback, but `sweep_batch` must not
+    depend on a caller doing that: an injected callback that raises aborted
+    the whole batch, and the outer loop then paused 60 seconds and lost the
+    remaining windows. Found by an integration test 2026-08-24 - the unit
+    tests covered the email builders and never exercised the wiring.
+
+    The same reasoning as everywhere else here: the sweep surviving matters
+    more than the telling.
+    """
+    if on_alarm is None:
+        return
+    try:
+        on_alarm(kind, facts)
+    except Exception as exc:              # noqa: BLE001
+        log.warning("alarm callback failed (%s); sweeping on", exc)
+
+
 def sweep_batch(
     windows: Sequence,
     store: SweepStore,
@@ -740,7 +782,7 @@ def sweep_batch(
 
     done = 0
     for _ in range(batch):
-        if should_stop is not None and should_stop():
+        if _safe_call(should_stop, what="should_stop", default=False):
             break
         if store.cursor >= len(windows):
             store.cursor = 0
@@ -828,7 +870,8 @@ def sweep_batch(
             cheapest = min(options, key=lambda o: o.price_usd)
             cheapest = _with_link(cheapest, max_stops)
             if store.record(cheapest) and on_find is not None:
-                on_find(Discovery.from_option(cheapest))
+                _safe_call(on_find, Discovery.from_option(cheapest),
+                           what="on_find")
 
             # Log every visa-free option, not just the cheapest. The price
             # baseline is a *distribution* - what a traveller typically pays
@@ -927,7 +970,7 @@ def sweep_batch(
                 # day and the only trace was a log line nobody was reading.
                 if on_alarm is not None and store.alarm_sent_for != store.throttled_since:
                     store.alarm_sent_for = store.throttled_since
-                    on_alarm("blocked", {
+                    _safe_alarm(on_alarm, "blocked", {
                         "empty_rate": rate, "since": store.throttled_since,
                         "suspect": len(store.suspect),
                         "rest_minutes": rest_for / 60,
@@ -947,7 +990,7 @@ def sweep_batch(
             log.info("Empty rate back to normal after %.0f min; "
                      "%d window(s) to re-check.", minutes, len(store.suspect))
             if on_alarm is not None and store.alarm_sent_for:
-                on_alarm("recovered", {
+                _safe_alarm(on_alarm, "recovered", {
                     "minutes": minutes, "suspect": len(store.suspect),
                     "windows_priced": store.windows_priced})
             store.alarm_sent_for = ""
