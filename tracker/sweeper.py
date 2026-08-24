@@ -157,7 +157,11 @@ class SweepStore:
     last_active: str = ""
     last_key: str = ""          # window key the cursor last finished
     found: dict = field(default_factory=dict)
-    recent: list = field(default_factory=list)   # 1 = empty, 0 = had fares
+    # 1 = a *fast* empty, the shape a throttle makes. Not the same as
+    # "no fares here", which is a fact about the date.
+    recent: list = field(default_factory=list)
+    # Plain emptiness, for reporting only. Never drives the alarm.
+    recent_blank: list = field(default_factory=list)
     # Windows whose "no fares" answer arrived while the connection looked
     # throttled. They are not empty, they are *unverified*, and they stay
     # here until they can be re-checked during a healthy stretch.
@@ -301,7 +305,13 @@ class SweepStore:
         """One line on whether the connection is being trusted right now."""
         recent = self.recent[-EMPTY_ALARM_WINDOW:]
         rate = (100 * sum(recent) / len(recent)) if recent else 0.0
-        bits = [f"empty rate {rate:.0f}% (13% is normal)"]
+        blank = self.recent_blank[-EMPTY_ALARM_WINDOW:]
+        blank_rate = (100 * sum(blank) / len(blank)) if blank else 0.0
+        # Two different numbers, and conflating them is what produced a false
+        # throttle alarm. The first is the connection; the second is the
+        # calendar.
+        bits = [f"throttle signal {rate:.0f}% (fast empties)",
+                f"{blank_rate:.0f}% of windows had no visa-free fare"]
         if self.suspect:
             bits.append(f"{len(self.suspect)} window(s) awaiting a re-check")
         if self.throttled_since:
@@ -949,7 +959,24 @@ def sweep_batch(
         # cold cursor grinding through November Saturdays that read as 100%
         # empty while hot picks in the same minutes were getting 17 results.
         if not is_recheck:
-            store.recent.append(0 if parsed else 1)
+            # **A throttle is fast; a barren date is not.**
+            #
+            # Counting every empty made the detector a measure of how good
+            # the *dates* are, not how good the *connection* is. The cold
+            # cursor walking November Saturdays - which carry no Zurich
+            # routing at all - read as 90% empty while hot picks in the same
+            # minutes were getting 17 results, and the alarm emailed a
+            # throttle that was not happening.
+            #
+            # The discriminator was measured on 2026-08-23 and then never
+            # used here: a throttled page comes back in 3-4 seconds, a real
+            # one takes about 6. So only a *suspiciously fast* empty is
+            # evidence of a throttle. A date Google genuinely has no flights
+            # for still costs it the time to say so.
+            store.recent.append(
+                1 if (not parsed and elapsed < SUSPECT_FAST_SECONDS) else 0)
+            store.recent_blank.append(0 if parsed else 1)
+            del store.recent_blank[:-EMPTY_ALARM_WINDOW * 2]
             del store.recent[:-EMPTY_ALARM_WINDOW * 2]
         throttled = looks_throttled(store.recent)
 
@@ -971,6 +998,9 @@ def sweep_batch(
             "at": _now(),
             "empty": not options,
             "healthy": not throttled and elapsed >= SUSPECT_FAST_SECONDS,
+            # Kept so the timing threshold can be re-calibrated from
+            # real data rather than from the one measurement in 2026.
+            "secs": round(elapsed, 1),
         }
         if len(store.checked) > MAX_CHECKED:
             for k in sorted(store.checked,

@@ -448,6 +448,31 @@ exactly what it thought was happening, and was specific enough to be
 checked and disproved in a few minutes. A vaguer warning would have been
 believed.
 
+### The fix that actually holds: a throttle is fast, a barren date is not
+
+Counting empties at all - however carefully filtered - measures the
+*calendar*, because whether a date has flights has nothing to do with
+whether Google is answering. No per-month baseline fixes that; it just
+moves the arbitrary number around.
+
+The signal that does work was measured on 2026-08-23 and then sat unused
+for a day: **a throttled page comes back in 3-4 seconds, a real one takes
+about 6.** A date Google genuinely has no flights for still costs it the
+time to say so. `SUSPECT_FAST_SECONDS = 4.5` existed and was only ever used
+to flag individual windows.
+
+So `recent` counts *fast empties* now, and nothing else. `recent_blank`
+keeps the plain emptiness for reporting, because it is real information
+about the dates - just not about Google. `--status` prints them apart:
+
+    throttle signal 0% (fast empties), 90% of windows had no visa-free fare
+
+Those two numbers being the same number is what produced the false alarm.
+
+Every check's elapsed time is stored in the ledger as `secs`, so the 4.5
+threshold can be re-derived from real data instead of resting forever on
+one afternoon's measurement.
+
 ## The reboot launcher was still armed at --delay 6
 
 Found 2026-08-24, live on the machine, and the nastiest kind of bug: one

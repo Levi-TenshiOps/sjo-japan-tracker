@@ -583,7 +583,10 @@ class TestRecoveryAfterThrottling:
     def test_health_is_quiet_when_all_is_well(self):
         s = SweepStore(recent=[0] * 20)
         text = s.health()
-        assert "THROTTLED" not in text and "empty rate 0%" in text
+        # Two separate numbers now: the connection, and the calendar.
+        # Conflating them is what produced a false throttle alarm.
+        assert "THROTTLED" not in text
+        assert "throttle signal 0%" in text
 
 
 class TestSweepRespectsTheLock:
@@ -1808,3 +1811,83 @@ class TestTheDetectorMeasuresTheConnectionNotTheVisaRule:
                     sleep=lambda _: None, delay_s=0)
         assert len(s.found) == 1
         assert list(s.found.values())[0]["price_usd"] == 2652
+
+
+class TestAThrottleIsFastAndABarrenDateIsNot:
+    """The signal that finally separates the connection from the calendar.
+
+    Counting every empty made the detector a measure of how good the *dates*
+    are. The cold cursor walking November Saturdays - no Zurich routing at
+    all - read as 90% empty while hot picks in the same minutes were getting
+    17 results, and the alarm emailed a throttle that was not happening.
+
+    The discriminator was measured on 2026-08-23 and then never used here: a
+    throttled page comes back in 3-4 seconds, a real one takes about 6. A
+    date Google genuinely has no flights for still costs it the time to say
+    so.
+    """
+
+    def _clock(self, monkeypatch, per_window):
+        """Make each window appear to take `per_window` seconds."""
+        ticks = iter(range(0, 100000))
+        base = [0.0]
+
+        def fake():
+            base[0] += per_window / 2.0
+            return base[0]
+
+        monkeypatch.setattr(sweeper.time, "monotonic", fake)
+
+    def test_a_slow_empty_is_not_a_throttle(self, monkeypatch):
+        """A barren date: Google took its time to say there is nothing."""
+        self._clock(monkeypatch, per_window=8.0)
+        s = SweepStore()
+        sweep_batch(windows(25), s, batch=25, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        assert sum(s.recent) == 0, "slow empties were counted as a throttle"
+        assert not looks_throttled(s.recent)
+
+    def test_a_fast_empty_is_a_throttle(self, monkeypatch):
+        """The real thing: refused in 3-4 seconds."""
+        self._clock(monkeypatch, per_window=3.0)
+        s = SweepStore()
+        sweep_batch(windows(25), s, batch=25, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        assert looks_throttled(s.recent), "a genuine throttle went undetected"
+
+    def test_a_full_page_is_never_a_throttle_however_fast(self, monkeypatch,
+                                                          dom):
+        """Cached or quick, a page with results is a page with results."""
+        self._clock(monkeypatch, per_window=0.5)
+        s = SweepStore()
+        sweep_batch(windows(25), s, batch=25, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        assert sum(s.recent) == 0
+        assert not looks_throttled(s.recent)
+
+    def test_blankness_is_still_recorded_separately(self, monkeypatch):
+        """It is real information about the dates - just not about Google."""
+        self._clock(monkeypatch, per_window=8.0)
+        s = SweepStore()
+        sweep_batch(windows(10), s, batch=10, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        assert sum(s.recent_blank) == 10, "the barren stretch went unrecorded"
+        assert sum(s.recent) == 0, "...but it is not a throttle"
+
+    def test_health_reports_both_numbers_apart(self, monkeypatch):
+        self._clock(monkeypatch, per_window=8.0)
+        s = SweepStore()
+        sweep_batch(windows(10), s, batch=10, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        text = s.health()
+        assert "throttle signal 0%" in text
+        assert "100% of windows had no visa-free fare" in text
+
+    def test_the_timing_is_recorded_for_recalibration(self, monkeypatch, dom):
+        """4.5s rests on a single measurement in 2026; keep the evidence."""
+        self._clock(monkeypatch, per_window=8.0)
+        s = SweepStore()
+        sweep_batch(windows(3), s, batch=3, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        assert all("secs" in v for v in s.checked.values())
+        assert all(v["secs"] > 0 for v in s.checked.values())
