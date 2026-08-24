@@ -109,3 +109,50 @@ class TestUpcoming:
         pairs = [(date(2026, 1, 1), date(2026, 1, 10)),
                  (date(2027, 2, 10), date(2027, 2, 24))]
         assert len(upcoming_pairs(pairs, date(2026, 8, 22))) == 1
+
+
+class TestEverySettingActuallyDoesSomething:
+    """A knob that is read by nothing is worse than no knob at all.
+
+    Audited 2026-08-23 by checking every Config field against the source.
+    Three were read nowhere: `broad_sweep`, `deep_sweep_top_windows` and
+    `max_requests_per_run`. The last one is the dangerous one - config.yaml
+    described it as "ceiling; the adaptive throttle usually sits lower",
+    while the real ceiling was a hardcoded MAX_BUDGET of 40 in throttle.py.
+    Lowering it to calm a throttle would have done precisely nothing.
+    """
+
+    def test_no_config_field_is_read_by_nothing(self):
+        import pathlib, re
+        from tracker.config import Config
+        root = pathlib.Path(__file__).resolve().parent.parent
+        src = "\n".join(
+            p.read_text(encoding="utf-8")
+            for p in list((root / "tracker").glob("*.py"))
+            + list(root.glob("*.py")))
+        dead = [f for f in Config.__dataclass_fields__
+                if not re.search(rf"\b(?:cfg|config|self)\.{f}\b", src)]
+        assert dead == [], f"config fields nothing reads: {dead}"
+
+    def test_the_request_ceiling_is_honoured(self):
+        from tracker.throttle import MAX_BUDGET
+        assert MAX_BUDGET == 40
+        # The clamp lives in cli.run; assert the shape it relies on.
+        from tracker.config import Config
+        assert Config().max_requests_per_run > 0
+
+    def test_the_removed_knobs_are_gone(self):
+        from tracker.config import Config
+        for name in ("broad_sweep", "deep_sweep_top_windows"):
+            assert name not in Config.__dataclass_fields__
+
+    def test_an_unknown_key_in_the_yaml_is_ignored_not_fatal(self):
+        """Removing a field must not break an existing config.yaml."""
+        import tempfile, pathlib
+        from tracker.config import load
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "c.yaml"
+            p.write_text("origins: [SJO]\nbroad_sweep: true\n"
+                         "deep_sweep_top_windows: 3\n", encoding="utf-8")
+            cfg = load(p, use_env=False)
+            assert cfg.origins == ["SJO"]

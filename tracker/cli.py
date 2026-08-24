@@ -212,6 +212,13 @@ def run(argv: list[str] | None = None) -> int:
     throttle_state = throttle.ThrottleState.load(cfg.throttle_file)
     rotation = schedule.RotationState.load(cfg.rotation_file)
     budget = args.budget or throttle_state.budget
+    # `max_requests_per_run` described itself in config.yaml as the ceiling
+    # and was read by nothing at all - the real ceiling was throttle.py's
+    # hardcoded MAX_BUDGET of 40. Lowering it in the config to calm a
+    # throttle would have had no effect whatsoever, which is the worst kind
+    # of setting to ship: one that looks like a lever and is painted on.
+    if cfg.max_requests_per_run:
+        budget = min(budget, cfg.max_requests_per_run)
 
     # Read the sweep store before planning: if it is feeding us, the grid's
     # coverage role is redundant and its budget can be cut to what the email
@@ -414,6 +421,7 @@ def run(argv: list[str] | None = None) -> int:
                 targets,
                 origin=cfg.origins[0], destination=cfg.chrome_destination,
                 max_stops=cfg.max_stops, chrome_override=cfg.chrome_path,
+                max_total_hours=cfg.max_total_hours,
                 timeout_s=cfg.chrome_timeout_s, budget_ms=cfg.chrome_budget_ms,
                 sleep=time.sleep, delay_s=cfg.request_delay_seconds,
             )

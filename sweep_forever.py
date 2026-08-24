@@ -179,6 +179,7 @@ def main() -> int:
                 windows, store,
                 origin=cfg.origins[0], destination=cfg.chrome_destination,
                 max_stops=cfg.max_stops, batch=args.batch,
+                max_total_hours=cfg.max_total_hours,
                 chrome_override=cfg.chrome_path, timeout_s=cfg.chrome_timeout_s,
                 budget_ms=cfg.chrome_budget_ms, delay_s=args.delay,
                 on_find=announce, history_csv=cfg.sweep_history_csv,

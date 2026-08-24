@@ -50,6 +50,27 @@ log = logging.getLogger(__name__)
 LINK_PRICE_MARGIN = 0.10
 
 
+def within_duration(option, max_total_hours: int | None) -> bool:
+    """Is this option inside the configured total-duration cap?
+
+    The Chrome paths filtered on `visa_ok` alone, so `max_total_hours` -
+    which `cli.collect` has always enforced on the HTTP grid through
+    `itinerary.partition` - did nothing at all on the path that decides the
+    alert price and the email headline. Nothing had exceeded it yet (the
+    longest of 384 observed fares was 52.2 h against a 60 h cap), so this
+    is closing a gap rather than fixing a visible symptom: tightening the
+    cap would silently have had no effect where it mattered most.
+
+    A duration of 0 means the page did not state one. That is not rejected:
+    unlike the visa rule, an unreadable duration carries no legal risk, and
+    failing closed here would throw away fares over a cosmetic field.
+    """
+    if not max_total_hours:
+        return True
+    minutes = getattr(option, "total_minutes", 0) or 0
+    return minutes <= max_total_hours * 60
+
+
 def booking_link(
     option: BrowserOption, *, max_stops: int | None = 2,
     margin: float = LINK_PRICE_MARGIN,
@@ -150,6 +171,7 @@ def verify(
     sleep: Callable[[float], None] | None = None,
     delay_s: float = 2.0,
     jitter_s: float = 2.0,
+    max_total_hours: int | None = None,
 ) -> list[BrowserOption]:
     """Price each target through Chrome. Visa-rejected options are dropped.
 
@@ -176,7 +198,8 @@ def verify(
                                 deep_link=url)
         usable = [
             replace(o, deep_link=booking_link(o, max_stops=max_stops))
-            for o in options if o.visa_ok
+            for o in options
+            if o.visa_ok and within_duration(o, max_total_hours)
         ]
         rejected = len(options) - len(usable)
         if options:

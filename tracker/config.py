@@ -40,13 +40,14 @@ class Config:
     min_layover_min: int = 75
 
     # scanning
-    broad_sweep: bool = True
     deep_hub_sweep: bool = True
-    deep_sweep_top_windows: int = 3
     # Requests held back from the window plan so the hub sweep can actually
     # run. Without a reserve the broad sweep spends the whole budget first
     # and the sweep is silently skipped on every run.
     hub_sweep_requests: int = 4
+    # A hard ceiling on one run's requests, applied on top of whatever the
+    # adaptive throttle worked out. Read by cli.py since 2026-08-23; before
+    # that it was read by nothing.
     max_requests_per_run: int = 90
     request_delay_seconds: float = 3.0
 

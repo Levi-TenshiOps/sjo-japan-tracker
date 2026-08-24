@@ -47,7 +47,7 @@ from typing import Callable, Iterable, Sequence
 from . import gate
 from . import history as history_mod
 from .browser import BrowserOption, chrome_path, fetch_dom, parse_options
-from .verify import booking_link
+from .verify import booking_link, within_duration
 
 log = logging.getLogger(__name__)
 
@@ -503,6 +503,7 @@ def sweep_batch(
     origin: str = "SJO",
     destination: str = "TYO",
     max_stops: int | None = 2,
+    max_total_hours: int | None = None,
     batch: int = 10,
     chrome: str | None = None,
     chrome_override: str = "",
@@ -594,7 +595,8 @@ def sweep_batch(
 
         options = [o for o in parse_options(
             dom, origin=origin, destination=destination,
-            depart_date=depart, return_date=ret) if o.visa_ok]
+            depart_date=depart, return_date=ret)
+            if o.visa_ok and within_duration(o, max_total_hours)]
         if options:
             cheapest = min(options, key=lambda o: o.price_usd)
             cheapest = _with_link(cheapest, max_stops)
