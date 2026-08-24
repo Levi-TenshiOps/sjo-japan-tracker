@@ -44,3 +44,4 @@ sweep.log
 /sweep_history.csv
 /google.lock
 /.chrome-profile/
+sweep.stop

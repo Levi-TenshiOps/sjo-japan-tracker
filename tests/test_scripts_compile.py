@@ -175,3 +175,54 @@ def test_the_store_is_pruned_on_startup(tmp_path):
     assert done.returncode == 0, done.stderr
     assert len(SweepStore.load(store_path).found) <= MAX_ENTRIES, (
         "the store was not pruned on startup")
+
+
+class TestTheSweepCanBeStoppedCleanly:
+    """Killing it leaves the Google lock behind.
+
+    Every hard kill on 2026-08-24 produced "Breaking a stale Google lock
+    held by sweep (pid ...)" in the next run's log - harmless, and it reads
+    exactly like a real problem. The trip owner asked about it twice.
+
+    A stop file works from anywhere: another terminal, a script, or a
+    session that no longer has the window the sweep was launched from.
+    """
+
+    def test_requesting_a_stop_is_visible_to_the_runner(self, tmp_path):
+        import sweep_forever as sf
+        f = str(tmp_path / "sweep.stop")
+        assert sf.stop_requested(f) is False
+        sf.request_stop(f)
+        assert sf.stop_requested(f) is True
+
+    def test_clearing_it_lets_the_next_run_start(self, tmp_path):
+        """A leftover file must not stop the next sweep before it begins."""
+        import sweep_forever as sf
+        f = str(tmp_path / "sweep.stop")
+        sf.request_stop(f)
+        sf.clear_stop(f)
+        assert sf.stop_requested(f) is False
+
+    def test_clearing_a_file_that_is_not_there_is_fine(self, tmp_path):
+        import sweep_forever as sf
+        sf.clear_stop(str(tmp_path / "never-existed.stop"))
+
+    def test_the_stop_command_writes_the_file_and_exits(self, tmp_path):
+        import json
+        prefs = json.loads((ROOT / "preferences.example.json").read_text(
+            encoding="utf-8"))
+        p = tmp_path / "prefs.json"
+        p.write_text(json.dumps(prefs), encoding="utf-8")
+        stop_file = ROOT / "sweep.stop"
+        existed = stop_file.exists()
+        try:
+            done = subprocess.run(
+                [sys.executable, str(ROOT / "sweep_forever.py"), "--stop",
+                 "--preferences", str(p), "--log", ""],
+                capture_output=True, text=True, timeout=60, cwd=str(ROOT))
+            assert done.returncode == 0, done.stderr
+            assert "Stop requested" in done.stdout
+            assert stop_file.exists()
+        finally:
+            if not existed:
+                stop_file.unlink(missing_ok=True)

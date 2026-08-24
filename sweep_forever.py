@@ -52,6 +52,36 @@ from tracker.sweeper import (                     # noqa: E402
 log = logging.getLogger("sweep")
 _stop = False
 
+# A file the running sweep watches for, so it can be stopped cleanly from
+# anywhere - another terminal, a script, or a session that no longer has the
+# window it was launched from.
+#
+# Killing the process instead leaves the Google lock behind, and the next
+# sweep has to break it: "Breaking a stale Google lock held by sweep (pid
+# 14944)". That warning is harmless and reads exactly like a real problem,
+# which on 2026-08-24 is precisely how the trip owner read it - twice.
+STOP_FILE = "sweep.stop"
+
+
+def stop_requested(path: str = STOP_FILE) -> bool:
+    """Has somebody asked for a clean stop?"""
+    try:
+        return Path(path).exists()
+    except OSError:
+        return False
+
+
+def request_stop(path: str = STOP_FILE) -> None:
+    Path(path).write_text("stop requested\n", encoding="utf-8")
+
+
+def clear_stop(path: str = STOP_FILE) -> None:
+    """Never let a leftover file stop the next run before it starts."""
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError:
+        pass
+
 
 def _handle_signal(signum, frame):      # noqa: ARG001
     global _stop
@@ -71,6 +101,10 @@ def build_args() -> argparse.Namespace:
     p.add_argument("--batch", type=int, default=10,
                    help="windows priced before each save (default 10)")
     p.add_argument("--once", action="store_true", help="one batch, then exit")
+    p.add_argument("--stop", action="store_true",
+                   help="ask a running sweep to finish its window and exit "
+                        "cleanly, then exit. Better than killing it: a killed "
+                        "sweep leaves the Google lock behind.")
     p.add_argument("--recheck-unverified", action="store_true",
                    help="queue every walked window that produced no fare and "
                         "was not checked on a healthy connection, then exit")
@@ -154,6 +188,14 @@ def main() -> int:
               f"alongside the normal rotation.")
         return 0
 
+    if args.stop:
+        request_stop()
+        print("Stop requested. The running sweep will finish its current "
+              "window, save, release the Google lock and exit - usually "
+              "within a couple of minutes.")
+        print("It is safe to start a new one after that; the cursor resumes.")
+        return 0
+
     if args.coverage:
         for line in coverage_report(windows, store,
                                     threshold=prefs.good_price_usd,
@@ -199,6 +241,13 @@ def main() -> int:
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
+
+    # A stop file left over from the previous run must not stop this one
+    # before it prices a single window.
+    clear_stop()
+
+    def wants_stop() -> bool:
+        return _stop or stop_requested()
 
     # Measured on this machine: a Chrome launch that renders a real
     # result page takes about 6s, not the 13 this once assumed - which
@@ -250,7 +299,7 @@ def main() -> int:
                 lock_path=cfg.google_lock,
                 hot_threshold=prefs.good_price_usd,
                 save_to=args.store,
-                should_stop=lambda: _stop,
+                should_stop=wants_stop,
                 on_alarm=raise_alarm,
             )
         except Exception as exc:            # noqa: BLE001 - must not die
@@ -266,8 +315,9 @@ def main() -> int:
                  f", {dropped} pruned" if dropped else "",
                  f", cheapest under threshold ${under[0].price_usd:,}" if under else "")
 
-        if args.once or _stop:
-            log.info("Stopped. %s", store.progress(len(windows)))
+        if args.once or wants_stop():
+            clear_stop()
+            log.info("Stopped cleanly. %s", store.progress(len(windows)))
             return 0
 
         if not priced:
