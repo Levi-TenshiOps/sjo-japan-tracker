@@ -1729,3 +1729,59 @@ class TestReChecksDoNotPoisonTheHealthSample:
         assert not looks_throttled(s.recent[-EMPTY_ALARM_WINDOW:]) or \
             sum(s.recent[-EMPTY_ALARM_WINDOW:]) < EMPTY_ALARM_WINDOW, (
             "draining a backlog convinced the sweep it was throttled")
+
+
+class TestTheDetectorMeasuresTheConnectionNotTheVisaRule:
+    """A page full of US routings is not a page Google refused to send.
+
+    The fixture's five rows are all real options and only one survives the
+    visa rule, so it is exactly the shape that was being misread: Google
+    answered fully, the visa filter emptied the list, and the sweep called
+    that a throttle.
+
+    Live on 2026-08-24: the alarm fired at 70% while the cold cursor was
+    walking November *Saturdays* - which carry no Zurich routing at all, 0
+    of 58 measured - and the warm picks in the same minutes were getting 16
+    results each. CLAUDE.md had recorded the right discriminator since
+    2026-08-22 and the detector was not using it.
+    """
+
+    def test_a_page_of_visa_rejected_options_is_not_empty(self, dom):
+        """Four of the five fixture rows are US or Canadian routings."""
+        s = SweepStore()
+        sweep_batch(windows(1), s, batch=1, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0, max_total_hours=1)
+        # max_total_hours=1 rejects every option, so nothing survives the
+        # filters - but Google still answered.
+        assert s.recent == [0], (
+            "a full page was recorded as a connection failure")
+
+    def test_a_genuinely_empty_page_still_counts_as_empty(self):
+        s = SweepStore()
+        sweep_batch(windows(3), s, batch=3, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        assert s.recent == [1, 1, 1]
+
+    def test_a_barren_stretch_no_longer_trips_the_alarm(self, dom):
+        """November Saturdays, reproduced: every option visa-rejected."""
+        s = SweepStore()
+        sweep_batch(windows(30), s, batch=25, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0, max_total_hours=1)
+        assert not looks_throttled(s.recent), (
+            "a barren but perfectly answered stretch read as a throttle")
+
+    def test_a_real_outage_still_trips_it(self):
+        """The fix must not become a silencer."""
+        s = SweepStore()
+        sweep_batch(windows(30), s, batch=25, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        assert looks_throttled(s.recent)
+
+    def test_findings_are_unaffected(self, dom):
+        """Only the health sample changed; the visa rule still decides what
+        is stored."""
+        s = SweepStore()
+        sweep_batch(windows(1), s, batch=1, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        assert len(s.found) == 1
+        assert list(s.found.values())[0]["price_usd"] == 2652

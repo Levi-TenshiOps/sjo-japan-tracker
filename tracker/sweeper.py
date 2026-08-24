@@ -924,8 +924,24 @@ def sweep_batch(
         # the independent HTTP grid sat steady at 25%, and the sweep was
         # still logging fares throughout. `recent` must measure the
         # *connection*, so only a fresh pick is evidence about it.
+        # Judge the *connection*, not the visa filter. `options` is the
+        # visa-free survivors; `parsed` is everything Google returned. A
+        # November Saturday returns 12-16 perfectly good options that are
+        # all US or Canada routings, so every one of them is visa-rejected
+        # and `options` is empty - which read as "Google sent nothing".
+        #
+        # It is not the same thing at all, and the difference is the whole
+        # question. CLAUDE.md has said so since 2026-08-22: "the
+        # discriminator is whether the payload contains any price at all: a
+        # genuine no-results page has zero, a good one had 96." The detector
+        # was not using it.
+        #
+        # This is what fired the false alarm on 2026-08-24 at 70%: the cold
+        # cursor had walked into November Saturdays, which carry no Zurich
+        # routing at all (0 of 58 measured), while the warm picks in the same
+        # minutes were getting 16 results each.
         if not replay:
-            store.recent.append(0 if options else 1)
+            store.recent.append(0 if parsed else 1)
             del store.recent[:-EMPTY_ALARM_WINDOW * 2]
         throttled = looks_throttled(store.recent)
 

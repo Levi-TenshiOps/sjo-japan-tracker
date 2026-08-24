@@ -408,7 +408,24 @@ same runs' Chrome verification returned 15-16 options on four windows of
 six, and the sweep itself was logging fares throughout - FRA $1,880, AMS
 $2,221, MEX+MTY $2,377 - while claiming it was blocked.
 
-The cause was the re-check queue, added the same morning. A window is
+**Two causes, and the second is the bigger one.**
+
+*The health sample was measuring the visa filter, not the connection.*
+`recent` recorded `0 if options else 1`, where `options` is what survives
+the visa rule. A November *Saturday* returns 12-16 perfectly good options
+that are all US or Canada routings, so every one is rejected, `options` is
+empty, and the sweep read that as "Google sent nothing". It is not remotely
+the same thing, and this file has recorded the right discriminator since
+2026-08-22 - "whether the payload contains any price at all: a genuine
+no-results page has zero, a good one had 96". The detector simply was not
+using it. It counts `parsed` now, before the visa rule.
+
+That is exactly what the cursor was doing when the alarm fired: walking
+November Saturdays, which carry no Zurich routing at all (0 of 58
+measured), while the warm picks in the same minutes were getting 16 results
+each.
+
+*The re-check queue fed itself.* Added the same morning. A window is
 queued *because* it came back empty. Re-pricing it produces another empty,
 which was being fed into `recent`, which raises the measured empty rate,
 which trips the detector, which queues more windows. With a 1,262-window
