@@ -350,8 +350,14 @@ class SweepStore:
         # windows. Both are ways a fare can be missed on a date we did check,
         # and both were previously invisible.
         if self.shortfalls:
-            bits.append(f"{self.shortfalls} window(s) where Google claimed "
-                        f"more results than could be parsed")
+            # Not truncation. Measured 2026-08-24: the DOM holds exactly
+            # twice what Google claims - every row's summary appears twice -
+            # and the difference between "claims" and "parsed" is fares that
+            # are identical in price, routing, airline and duration, i.e.
+            # the same deal at another departure time.
+            bits.append(f"{self.shortfalls} window(s) with duplicate "
+                        f"listings ({self.rows_deduped} rows collapsed, "
+                        f"{self.rows_missed_by_parser} unreadable)")
         if self.unreadable:
             bits.append(f"{self.unreadable} option(s) dropped as unreadable")
         if self.dom_sorted or self.dom_unsorted:

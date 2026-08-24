@@ -1931,3 +1931,40 @@ class TestTheHealthSampleMigration:
                         "price_usd": 1347, "seen_at": "2026-08-24T00:00:00+00:00"}
         s.save(p)
         assert SweepStore.load(p).found, "the migration threw away a fare"
+
+
+class TestTheTruncationGapWasNeverAGap:
+    """Measured 2026-08-24, and it closes the last open coverage question.
+
+        Google claims 15, DOM 30 rows, parsed 12 (18 duplicate, 0 unreadable)
+        Google claims 16, DOM 32 rows, parsed 13 (19 duplicate, 0 unreadable)
+
+    The DOM holds exactly twice what Google claims - every row's summary
+    appears twice - and nothing is unreadable. So the "View more flights"
+    control hides nothing from us; the page already contains every result
+    Google says it has.
+
+    What is left is `parse_options` collapsing rows identical in price,
+    routing, airline *and* duration: the same deal at another departure
+    time. That costs nothing when the question is "what is the cheapest
+    fare".
+    """
+
+    def test_unreadable_rows_are_the_ones_worth_alarming_about(self):
+        """If Google restyles, this is the counter that moves."""
+        s = SweepStore()
+        assert s.rows_missed_by_parser == 0
+        assert s.rows_deduped == 0
+
+    def test_health_calls_them_duplicates_not_truncation(self):
+        s = SweepStore(shortfalls=11, rows_deduped=180,
+                       rows_missed_by_parser=0)
+        text = s.health()
+        assert "duplicate listings" in text
+        assert "180 rows collapsed" in text
+        assert "0 unreadable" in text
+
+    def test_the_dangerous_half_is_visible_in_the_same_line(self):
+        s = SweepStore(shortfalls=3, rows_deduped=4,
+                       rows_missed_by_parser=7)
+        assert "7 unreadable" in s.health()

@@ -636,14 +636,29 @@ no date is silently written off. That says nothing about completeness
 *within* a window, and there are two ways to miss a fare on a date that was
 checked. Both were invisible until 2026-08-24.
 
-**Google says how many results it has.** The page prose carries "16 results
-returned" and a "View more flights" control that `--dump-dom` cannot click.
-Measured 2026-08-23, a live page claimed 16 while the parser found 13.
-`claimed_result_count` reads that number and both Chrome paths log a
-shortfall; the sweep counts them in `store.shortfalls` and `--status` shows
-it. Re-querying with `max_price` caps has shown the hidden rows are the dear
-ones, so this is a monitor rather than a fix - but a silent shortfall is
-indistinguishable from a window that genuinely had fewer fares.
+**Google says how many results it has - and we see all of them.** This was
+read all day as truncation: the page prose carries "16 results returned",
+the parser found 13, and there is a "View more flights" control
+`--dump-dom` cannot click, so three fares looked lost. Measured properly on
+2026-08-24 by counting the rows physically in the DOM:
+
+    Google claims 15, DOM 30 rows, parsed 12 (18 duplicate, 0 unreadable)
+    Google claims 16, DOM 32 rows, parsed 13 (19 duplicate, 0 unreadable)
+
+**The DOM holds exactly twice what Google claims** - every row's summary
+appears twice, which is why the parser de-duplicates at all - and
+**nothing is unreadable**. So the page contains every result Google says it
+has; the control hides nothing from us.
+
+The remaining difference is `parse_options` collapsing rows identical in
+price, routing, airline *and* duration: the same deal at a different
+departure time. That costs nothing when the question is "what is the
+cheapest fare", which is the only question this project asks.
+
+So the ~16% "gap" was never a coverage hole. It is still counted -
+`rows_deduped` and `rows_missed_by_parser` - because the second of those
+becoming non-zero *would* be a real loss and would mean Google had changed
+its markup.
 
 **An unreadable routing is dropped, not rejected.** `banned_reason` fails
 closed when it cannot see the connecting airports, which is right - the visa
