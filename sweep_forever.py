@@ -273,6 +273,8 @@ def main() -> int:
                 content = alarm_mod.blocked_email(**facts)
             elif kind == "recovered":
                 content = alarm_mod.recovered_email(**facts)
+            elif kind == "silent":
+                content = alarm_mod.silent_email(**facts)
             else:
                 return
             alarm_mod.send(content, alarm_cfg)
@@ -307,6 +309,26 @@ def main() -> int:
             time.sleep(60)
 
         dropped = store.prune()
+
+        # Watch the *other* process. A scheduled run that crashes cannot
+        # report it - on 2026-08-24 one malformed CSV line killed every run
+        # four hours before its email phase, while this sweep carried on
+        # looking perfectly healthy. The sweep is the only thing always
+        # running, so it is the only thing that can notice.
+        silent = alarm_mod.hours_since_last_email(cfg.state_file)
+        if silent is not None and silent > alarm_mod.SILENCE_HOURS:
+            if not store.silence_alarm_sent:
+                store.silence_alarm_sent = True
+                log.warning("No alert email for %.0f h - the scheduled runs "
+                            "have stopped delivering. Emailing a warning.",
+                            silent)
+                raise_alarm("silent", {"hours": silent,
+                                       "threshold": alarm_mod.SILENCE_HOURS})
+        elif silent is not None and store.silence_alarm_sent:
+            log.info("Alert emails are flowing again (last one %.1f h ago).",
+                     silent)
+            store.silence_alarm_sent = False
+
         store.save(args.store)
         under = store.best(limit=3, threshold=prefs.good_price_usd)
         if store.suspect or store.throttled_since:

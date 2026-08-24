@@ -178,6 +178,10 @@ class SweepStore:
     # currently in progress. Persisted, so a restart mid-throttle does
     # not send a second alarm about the same event.
     alarm_sent_for: str = ""
+    # Whether the trip owner has been told the scheduled runs stopped
+    # delivering. Persisted so a restart does not re-send, and reset
+    # when emails start flowing again.
+    silence_alarm_sent: bool = False
     warm_index: int = 0        # rotation over the schedule-plausible windows
     # key -> {at, empty, healthy}. Every check, not just the finds.
     checked: dict = field(default_factory=dict)

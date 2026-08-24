@@ -384,3 +384,102 @@ class TestTheAlarmFiresOncePerEvent:
             s = SweepStore(alarm_sent_for="2026-08-23T15:20:00+00:00")
             s.save(p)
             assert SweepStore.load(p).alarm_sent_for == "2026-08-23T15:20:00+00:00"
+
+
+class TestTheSilenceWatchdog:
+    """Notice when the product stops, not just when the search does.
+
+    On 2026-08-24 one malformed CSV line crashed every scheduled run four
+    hours before its email phase. The sweep carried on perfectly, --status
+    read 15% empty, the coverage invariant reported zero orphans - all true,
+    and all about the wrong thing. Nothing anywhere watched for "the emails
+    stopped arriving", which is the only thing the trip owner actually
+    receives.
+
+    The sweep is the only always-on process, so it is the only thing that
+    can watch the scheduled runs. It reads their state file, never its own.
+    """
+
+    def _state(self, tmp_path, hours_ago=None, raw=None):
+        import json
+        from datetime import datetime, timedelta, timezone
+        p = tmp_path / "state.json"
+        if raw is not None:
+            p.write_text(raw, encoding="utf-8")
+            return p
+        body = {"day": "2026-08-24", "emails_sent_today": 1}
+        if hours_ago is not None:
+            body["last_email_at"] = (
+                datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+            ).isoformat()
+        p.write_text(json.dumps(body), encoding="utf-8")
+        return p
+
+    def test_a_recent_email_is_not_silence(self, tmp_path):
+        h = alarm.hours_since_last_email(self._state(tmp_path, hours_ago=2))
+        assert h < alarm.SILENCE_HOURS
+
+    def test_the_overnight_gap_is_not_silence(self, tmp_path):
+        """Evening digest ~21:30 to the morning run ~06:45 is ~9 hours and
+        completely normal. A watchdog that cries every night is useless."""
+        h = alarm.hours_since_last_email(self._state(tmp_path, hours_ago=10))
+        assert h < alarm.SILENCE_HOURS
+
+    def test_a_long_silence_is_caught(self, tmp_path):
+        h = alarm.hours_since_last_email(self._state(tmp_path, hours_ago=20))
+        assert h > alarm.SILENCE_HOURS
+
+    def test_the_real_outage_would_have_been_caught(self, tmp_path):
+        """09:03 crash, found by the trip owner at ~10:30 the next morning.
+        The watchdog would have fired overnight instead."""
+        h = alarm.hours_since_last_email(self._state(tmp_path, hours_ago=17))
+        assert h > alarm.SILENCE_HOURS
+
+    def test_never_emailed_is_not_reported_as_silence(self, tmp_path):
+        """A fresh install has no last_email_at and is not broken."""
+        assert alarm.hours_since_last_email(self._state(tmp_path)) is None
+
+    def test_a_missing_state_file_is_quiet(self, tmp_path):
+        assert alarm.hours_since_last_email(tmp_path / "nope.json") is None
+
+    def test_a_corrupt_state_file_is_quiet(self, tmp_path):
+        """The lesson from the CSV: never crash on a file you only read."""
+        assert alarm.hours_since_last_email(
+            self._state(tmp_path, raw="{ not json")) is None
+
+    def test_a_nonsense_timestamp_is_quiet(self, tmp_path):
+        import json
+        p = self._state(tmp_path, raw=json.dumps(
+            {"last_email_at": "not-a-timestamp"}))
+        assert alarm.hours_since_last_email(p) is None
+
+    def test_a_naive_timestamp_is_handled(self, tmp_path):
+        """An older state file may have no timezone on it."""
+        import json
+        from datetime import datetime, timedelta
+        stamp = (datetime.utcnow() - timedelta(hours=20)).isoformat()
+        p = self._state(tmp_path, raw=json.dumps({"last_email_at": stamp}))
+        h = alarm.hours_since_last_email(p)
+        assert h is not None and h > alarm.SILENCE_HOURS
+
+    def test_the_email_says_where_to_look(self, tmp_path):
+        c = alarm.silent_email(hours=17.0, threshold=alarm.SILENCE_HOURS)
+        assert "17 hours" in c.text
+        assert "tracker.log" in c.text and "Task Scheduler" in c.text
+
+    def test_the_email_points_at_the_right_process(self):
+        """The sweep is fine; saying so stops the reader debugging it."""
+        c = alarm.silent_email(hours=17.0, threshold=16.0)
+        assert "not the search" in c.text
+
+    def test_the_email_names_the_signature_of_the_real_bug(self):
+        """An empty tail in tracker.log, not an error message."""
+        c = alarm.silent_email(hours=17.0, threshold=16.0)
+        assert "stop mid-run" in c.text or "empty tail" in c.text
+
+    def test_it_reads_the_state_file_not_the_sweep_store(self, tmp_path):
+        """The whole point: watch the other process, not yourself."""
+        import inspect
+        src = inspect.getsource(alarm.hours_since_last_email)
+        assert "last_email_at" in src
+        assert "discoveries" not in src

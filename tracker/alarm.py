@@ -23,8 +23,11 @@ telling.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 
 from .email_render import EmailContent
 from .notify import send_email
@@ -117,6 +120,67 @@ def recovered_email(*, minutes: float, suspect: int,
             f"{suspect} window(s) are still queued for a second look - dates "
             "checked while Google was refusing, whose empty answer cannot be "
             "trusted. They are re-checked automatically.",
+        ])
+
+
+# Two emails a day means the longest legitimate gap is overnight: the
+# evening digest at ~21:30 to the morning run at ~06:45, about nine hours.
+# Sixteen hours is comfortably past any normal gap and still catches a
+# failure the same day it happens.
+SILENCE_HOURS = 16.0
+
+
+def hours_since_last_email(state_path: str | Path,
+                           now: datetime | None = None) -> float | None:
+    """How long since an email actually went out. None if never, or unreadable.
+
+    Read from the *state file the scheduled run writes*, not from anything
+    the sweep controls. The point is to notice when the other process has
+    stopped delivering, which is the one failure the sweep cannot see by
+    looking at itself.
+    """
+    try:
+        data = json.loads(Path(state_path).read_text(encoding="utf-8"))
+        stamp = data.get("last_email_at") or ""
+        if not stamp:
+            return None
+        seen = datetime.fromisoformat(stamp)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    return (now - seen).total_seconds() / 3600.0
+
+
+def silent_email(*, hours: float, threshold: float) -> EmailContent:
+    """The alarm for the product being dead while the sweep looks healthy.
+
+    Written after 2026-08-24, when one malformed CSV line crashed every
+    scheduled run four hours before its email phase. The sweep carried on
+    perfectly, --status read 15% empty, the coverage invariant reported zero
+    orphans - all true, and all about the wrong thing. The trip owner found
+    it because the emails stopped.
+    """
+    return _plain(
+        "⚠ No flight email has gone out for %.0f hours" % hours,
+        [
+            f"The last alert email was sent {hours:.0f} hours ago. Two go out "
+            f"a day, so anything past {threshold:.0f} hours means the "
+            f"scheduled runs have stopped delivering.",
+            "",
+            "The background sweep is still running - this warning comes from "
+            "it - so the fault is in the scheduled task, not the search.",
+            "",
+            "Worth checking, in order:",
+            "  1. tracker.log - does it stop mid-run, with no error?",
+            "  2. Task Scheduler - are FlightTracker1-6 still Ready, and what "
+            "is their last result?",
+            "  3. python -m tracker.cli --runs-per-day 6 - run one by hand "
+            "and read the traceback.",
+            "",
+            "A crash lands after the last line a run logs, so an empty tail "
+            "in tracker.log is the signature rather than an error message.",
         ])
 
 
