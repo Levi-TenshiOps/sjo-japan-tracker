@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import signal
 import sys
 import time
@@ -40,6 +41,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from tracker import alarm as alarm_mod            # noqa: E402
+from tracker import gate                          # noqa: E402
 from tracker import config as config_mod          # noqa: E402
 from tracker.browser import chrome_path           # noqa: E402
 from tracker.preferences import Preferences, PreferencesError  # noqa: E402
@@ -79,6 +81,40 @@ def clear_stop(path: str = STOP_FILE) -> None:
     """Never let a leftover file stop the next run before it starts."""
     try:
         Path(path).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+# One sweeper at a time. `gate.py` stops two processes querying Google
+# simultaneously, but nothing stopped two *sweepers* existing - and they
+# would both hold the store in memory and write it per window, so the two
+# cursors would overwrite each other and coverage would silently go
+# backwards. Easy to do by accident: start it twice, or add a start-at-boot
+# task while one is already running.
+INSTANCE_LOCK = "sweep.pid"
+
+
+def another_sweeper_running(path: str = INSTANCE_LOCK) -> int | None:
+    """PID of a live sweeper other than this one, or None."""
+    p = Path(path)
+    try:
+        pid = int(p.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    if pid == os.getpid():
+        return None
+    return pid if gate._alive(pid) else None
+
+
+def claim_instance(path: str = INSTANCE_LOCK) -> None:
+    Path(path).write_text(str(os.getpid()), encoding="utf-8")
+
+
+def release_instance(path: str = INSTANCE_LOCK) -> None:
+    p = Path(path)
+    try:
+        if p.exists() and p.read_text(encoding="utf-8").strip() == str(os.getpid()):
+            p.unlink()
     except OSError:
         pass
 
@@ -239,6 +275,15 @@ def main() -> int:
                   args.config)
         return 2
 
+    other = another_sweeper_running()
+    if other is not None:
+        log.error("Another sweeper is already running (pid %d). Two of them "
+                  "would overwrite each other's cursor and coverage would go "
+                  "backwards. Stop it first:  python sweep_forever.py --stop",
+                  other)
+        return 3
+    claim_instance()
+
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
@@ -339,6 +384,7 @@ def main() -> int:
 
         if args.once or wants_stop():
             clear_stop()
+            release_instance()
             log.info("Stopped cleanly. %s", store.progress(len(windows)))
             return 0
 

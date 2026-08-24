@@ -45,3 +45,4 @@ sweep.log
 /google.lock
 /.chrome-profile/
 sweep.stop
+sweep.pid

@@ -456,8 +456,9 @@ class TestTheSilenceWatchdog:
     def test_a_naive_timestamp_is_handled(self, tmp_path):
         """An older state file may have no timezone on it."""
         import json
-        from datetime import datetime, timedelta
-        stamp = (datetime.utcnow() - timedelta(hours=20)).isoformat()
+        from datetime import datetime, timedelta, timezone
+        stamp = (datetime.now(timezone.utc).replace(tzinfo=None)
+                 - timedelta(hours=20)).isoformat()
         p = self._state(tmp_path, raw=json.dumps({"last_email_at": stamp}))
         h = alarm.hours_since_last_email(p)
         assert h is not None and h > alarm.SILENCE_HOURS

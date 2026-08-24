@@ -11,6 +11,7 @@ Compiling is a low bar. It is also exactly the bar that was missed.
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import pathlib
 import py_compile
 import subprocess
 from pathlib import Path
@@ -226,3 +227,71 @@ class TestTheSweepCanBeStoppedCleanly:
         finally:
             if not existed:
                 stop_file.unlink(missing_ok=True)
+
+
+class TestOnlyOneSweeperAtATime:
+    """Two sweepers would fight over the store.
+
+    `gate.py` stops two processes querying Google simultaneously, and
+    nothing stopped two *sweepers* existing. Both hold the store in memory
+    and write it after every window, so their cursors overwrite each other
+    and coverage silently goes backwards - the worst shape of bug this
+    project keeps producing.
+
+    Easy to hit by accident: start it twice, or add a start-at-boot task
+    while one is already running.
+    """
+
+    def test_no_lock_means_nothing_is_running(self, tmp_path):
+        import sweep_forever as sf
+        assert sf.another_sweeper_running(str(tmp_path / "sweep.pid")) is None
+
+    def test_our_own_pid_is_not_another_sweeper(self, tmp_path):
+        import os
+        import sweep_forever as sf
+        f = tmp_path / "sweep.pid"
+        f.write_text(str(os.getpid()), encoding="utf-8")
+        assert sf.another_sweeper_running(str(f)) is None
+
+    def test_a_dead_pid_does_not_block_a_restart(self, tmp_path):
+        """Otherwise a crash would lock the sweep out permanently."""
+        import sweep_forever as sf
+        f = tmp_path / "sweep.pid"
+        f.write_text("999999", encoding="utf-8")
+        assert sf.another_sweeper_running(str(f)) is None
+
+    def test_a_live_other_pid_is_reported(self, tmp_path):
+        import subprocess as sp
+        import sweep_forever as sf
+        proc = sp.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            f = tmp_path / "sweep.pid"
+            f.write_text(str(proc.pid), encoding="utf-8")
+            assert sf.another_sweeper_running(str(f)) == proc.pid
+        finally:
+            proc.kill()
+
+    def test_a_corrupt_pid_file_does_not_block(self, tmp_path):
+        """Same lesson as everywhere else: never crash on a file you read."""
+        import sweep_forever as sf
+        f = tmp_path / "sweep.pid"
+        for junk in ("", "not a pid", "0\n", "\x00"):
+            f.write_text(junk, encoding="utf-8")
+            assert sf.another_sweeper_running(str(f)) is None
+
+    def test_claiming_and_releasing_round_trips(self, tmp_path):
+        import os
+        import sweep_forever as sf
+        f = str(tmp_path / "sweep.pid")
+        sf.claim_instance(f)
+        assert pathlib.Path(f).read_text(encoding="utf-8") == str(os.getpid())
+        sf.release_instance(f)
+        assert not pathlib.Path(f).exists()
+
+    def test_releasing_somebody_elses_lock_is_refused(self, tmp_path):
+        """A second process must not clear the first one's claim."""
+        import sweep_forever as sf
+        f = tmp_path / "sweep.pid"
+        f.write_text("999999", encoding="utf-8")
+        sf.release_instance(str(f))
+        assert f.exists(), "it deleted a lock it did not own"

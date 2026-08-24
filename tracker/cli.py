@@ -20,6 +20,12 @@ from .preferences import Preferences, PreferencesError
 from .search import Searcher, fetch_text_query, plan_broad, plan_hub_sweep
 
 CR_TZ = ZoneInfo("America/Costa_Rica")
+
+# How long the background sweep may go without pricing a window
+# before a scheduled run says so. It walks one window per ~96s, so an
+# hour of silence already means something is wrong; three is well
+# past any throttle rest, which tops out at one hour.
+SWEEP_IDLE_HOURS = 3.0
 log = logging.getLogger("tracker")
 
 
@@ -237,6 +243,24 @@ def run(argv: list[str] | None = None) -> int:
     else:
         log.info("Sweep has only %d fresh finding(s); running the full grid",
                  len(_swept))
+
+    # Watch the sweep, because the sweep watches these runs and nothing was
+    # watching *it*. A reboot leaves it down - it is started by hand, unlike
+    # these tasks - and then its silence watchdog is down with it, so a
+    # stopped sweeper is invisible from both sides. The 2026-08-23 power cut
+    # did exactly this and it went unnoticed until somebody asked.
+    #
+    # Only warn; never fail the run. The email matters more than the warning,
+    # and the grid alone still produces one.
+    try:
+        idle = sweeper._age_hours(_store.last_active) if _store.last_active else None
+        if idle is not None and idle > SWEEP_IDLE_HOURS:
+            log.warning("The background sweep has not priced a window in "
+                        "%.1f h. It does not restart itself - check whether "
+                        "it is still running: python sweep_forever.py --status",
+                        idle)
+    except Exception:                       # noqa: BLE001
+        pass
 
     rows = [] if args.no_history else _read_rows(cfg.history_csv)
     hot = schedule.hot_keys_from_history(rows, limit=cfg.hot_list_size)
