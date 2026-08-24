@@ -38,7 +38,10 @@ from typing import Callable, Iterable, Sequence
 
 from fast_flights import FlightQuery, Passengers, create_query
 
-from .browser import BrowserOption, chrome_path, fetch_dom, parse_options
+from .browser import (
+    BrowserOption, chrome_path, claimed_result_count, fetch_dom, parse_options,
+    unreadable_count,
+)
 from .search import RouteQuery, build_query
 
 log = logging.getLogger(__name__)
@@ -48,6 +51,32 @@ log = logging.getLogger(__name__)
 # link opens on the one flight rather than a page of thirteen, loose enough
 # that a small overnight rise does not turn it into an empty page.
 LINK_PRICE_MARGIN = 0.10
+
+
+def _report_shortfall(dom: str, options, target) -> None:
+    """Say out loud when a window may have been under-collected.
+
+    Two ways a fare can be missed on a window we did check, both previously
+    invisible:
+
+    * Google says it has more results than we parsed. The page carries a
+      "View more flights" control `--dump-dom` cannot click, so a shortfall
+      is expected - but a silent one is indistinguishable from a window that
+      genuinely had fewer fares.
+    * An option's routing could not be read, so `banned_reason` fails closed
+      and drops it. That is right for safety and wrong to do quietly: it may
+      have been a bookable fare.
+    """
+    claimed = claimed_result_count(dom)
+    if claimed is not None and claimed > len(options):
+        log.info("%s +%dn: Google claims %d results, parsed %d - %d not seen",
+                 target.depart, (target.ret - target.depart).days,
+                 claimed, len(options), claimed - len(options))
+    unreadable = unreadable_count(options)
+    if unreadable:
+        log.warning("%s +%dn: %d option(s) dropped because the routing could "
+                    "not be read - these may be bookable fares",
+                    target.depart, (target.ret - target.depart).days, unreadable)
 
 
 def within_duration(option, max_total_hours: int | None) -> bool:
@@ -202,6 +231,7 @@ def verify(
             if o.visa_ok and within_duration(o, max_total_hours)
         ]
         rejected = len(options) - len(usable)
+        _report_shortfall(dom, options, t)
         if options:
             log.info("Chrome %s %s -> %s +%dn: %d option(s), %d visa-rejected, "
                      "cheapest usable %s",

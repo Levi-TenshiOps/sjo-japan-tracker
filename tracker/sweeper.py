@@ -46,7 +46,10 @@ from typing import Callable, Iterable, Sequence
 
 from . import gate
 from . import history as history_mod
-from .browser import BrowserOption, chrome_path, fetch_dom, parse_options
+from .browser import (
+    BrowserOption, chrome_path, claimed_result_count, fetch_dom,
+    parse_options, unreadable_count,
+)
 from .verify import booking_link, within_duration
 
 log = logging.getLogger(__name__)
@@ -160,6 +163,11 @@ class SweepStore:
     # here until they can be re-checked during a healthy stretch.
     suspect: list = field(default_factory=list)
     throttle_events: int = 0
+    # Windows where Google claimed more results than we could parse,
+    # and options dropped because their routing was unreadable. Both
+    # are ways a fare can be missed on a window we *did* check.
+    shortfalls: int = 0
+    unreadable: int = 0
     warm_index: int = 0        # rotation over the schedule-plausible windows
     # key -> {at, empty, healthy}. Every check, not just the finds.
     checked: dict = field(default_factory=dict)
@@ -283,6 +291,14 @@ class SweepStore:
                         f"{self.throttled_since[11:16]} UTC")
         elif self.throttle_events:
             bits.append(f"{self.throttle_events} throttle event(s) so far")
+        # Completeness *within* a window, as distinct from coverage *of*
+        # windows. Both are ways a fare can be missed on a date we did check,
+        # and both were previously invisible.
+        if self.shortfalls:
+            bits.append(f"{self.shortfalls} window(s) where Google claimed "
+                        f"more results than could be parsed")
+        if self.unreadable:
+            bits.append(f"{self.unreadable} option(s) dropped as unreadable")
         return ", ".join(bits)
 
     def progress(self, total: int) -> str:
@@ -715,10 +731,23 @@ def sweep_batch(
             dom = ""
         elapsed = time.monotonic() - started
 
-        options = [o for o in parse_options(
-            dom, origin=origin, destination=destination,
-            depart_date=depart, return_date=ret)
-            if o.visa_ok and within_duration(o, max_total_hours)]
+        # Parse once, then filter, so the shortfall check can see what was
+        # dropped and why. Filtering inside the comprehension hid both.
+        parsed = parse_options(dom, origin=origin, destination=destination,
+                               depart_date=depart, return_date=ret)
+        options = [o for o in parsed
+                   if o.visa_ok and within_duration(o, max_total_hours)]
+        claimed = claimed_result_count(dom)
+        if claimed is not None and claimed > len(parsed):
+            store.shortfalls += 1
+            log.info("%s +%dn: Google claims %d results, parsed %d",
+                     depart, (ret - depart).days, claimed, len(parsed))
+        blind = unreadable_count(parsed)
+        if blind:
+            store.unreadable += blind
+            log.warning("%s +%dn: %d option(s) dropped - routing unreadable, "
+                        "so the visa rule could not be checked",
+                        depart, (ret - depart).days, blind)
         if options:
             cheapest = min(options, key=lambda o: o.price_usd)
             cheapest = _with_link(cheapest, max_stops)

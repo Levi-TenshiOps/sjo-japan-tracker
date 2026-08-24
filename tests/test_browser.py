@@ -17,7 +17,8 @@ from datetime import date
 import pytest
 
 from tracker.browser import (
-    BrowserOption, chrome_path, fetch_dom, parse_options, visa_free,
+    BrowserOption, chrome_path, claimed_result_count, fetch_dom, parse_options,
+    unreadable_count, visa_free,
 )
 
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -130,3 +131,57 @@ class TestChromeDiscovery:
         """A broken Chrome must degrade to "no options", never raise."""
         assert fetch_dom("https://example.com",
                          chrome="/definitely/not/here/chrome", timeout=5) == ""
+
+
+class TestWeCanTellWhenAWindowWasUnderCollected:
+    """Two ways to miss a fare on a window we *did* check, both invisible.
+
+    The trip owner asked for 100% of applicable flights, not 99%. Coverage
+    of *windows* is now guaranteed by the check ledger, but that says
+    nothing about completeness *within* a window:
+
+    * Google states its own count ("16 results returned") and the page has a
+      "View more flights" control `--dump-dom` cannot click. Measured
+      2026-08-23 a live page claimed 16 while the parser found 13, and
+      nothing recorded the gap.
+    * An option whose routing cannot be read is dropped, because
+      `banned_reason` fails closed. Right for safety, wrong to do silently -
+      it may have been a bookable fare.
+
+    Neither is fixed by detecting it. Both stop being unknowable.
+    """
+
+    @pytest.mark.parametrize("text,expected", [
+        ("16 results returned", 16),
+        ("About 42 results found", 42),
+        ("1 result returned", 1),
+        ("no count anywhere here", None),
+        ("9999 results returned", None),      # implausible, ignored
+        ("0 results returned", None),
+        ("", None),
+    ])
+    def test_the_claimed_count_is_read_when_present(self, text, expected):
+        assert claimed_result_count(text) == expected
+
+    def test_a_shortfall_is_detectable(self):
+        dom = "<html><body>16 results returned</body></html>"
+        assert claimed_result_count(dom) == 16       # vs however many parse
+
+    def test_unreadable_routings_are_counted_apart_from_visa_rejections(self):
+        readable_banned = BrowserOption(
+            price_usd=900, origin="SJO", destination="TYO",
+            depart_date=date(2027, 1, 1), return_date=date(2027, 1, 28),
+            stops=("DFW",), airlines=("X",), total_minutes=1000, deep_link="")
+        unreadable = BrowserOption(
+            price_usd=900, origin="SJO", destination="TYO",
+            depart_date=date(2027, 1, 1), return_date=date(2027, 1, 28),
+            stops=("??",), airlines=("X",), total_minutes=1000, deep_link="")
+        assert not readable_banned.visa_ok and not unreadable.visa_ok
+        assert unreadable_count([readable_banned, unreadable]) == 1, (
+            "a visa rejection is a correct decision; an unreadable routing "
+            "is a fare we could not judge, and they must not be conflated")
+
+    def test_a_clean_page_reports_nothing_to_worry_about(self, options):
+        """The real captured DOM: every routing readable, nothing dropped
+        for being unverifiable."""
+        assert unreadable_count(options) == 0

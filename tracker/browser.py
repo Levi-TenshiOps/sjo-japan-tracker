@@ -225,6 +225,46 @@ def _minutes(text: str) -> int:
     return hrs * 60 + mins
 
 
+# Google states its own result count in the page prose ("16 results
+# returned"). Comparing it against what we parsed is the only way to notice
+# that a window was under-collected: measured 2026-08-23 a live page claimed
+# 16 while the parser found 13, and nothing anywhere said so.
+_CLAIMED = re.compile(r"(\d{1,4})\s+results?\s+(?:returned|found)", re.I)
+
+
+def claimed_result_count(html: str) -> int | None:
+    """How many results Google says it has, or None if it does not say.
+
+    The page also carries a "View more flights" control that `--dump-dom`
+    cannot click, so a shortfall is expected rather than alarming. What
+    matters is that it stops being invisible: a silent shortfall is
+    indistinguishable from a window that genuinely had fewer fares, and the
+    trip owner asked for 100% of applicable flights, not 99%.
+    """
+    if not html:
+        return None
+    m = _CLAIMED.search(html)
+    if not m:
+        return None
+    try:
+        n = int(m.group(1))
+    except ValueError:
+        return None
+    return n if 0 < n < 1000 else None
+
+
+def unreadable_count(options) -> int:
+    """Options dropped because their routing could not be read.
+
+    These are not visa rejections - they are fares we may well be able to
+    book, discarded because `banned_reason` fails closed when it cannot
+    check the rule. That is the right call for safety and the wrong thing to
+    do silently, so it is counted separately.
+    """
+    return sum(1 for o in options
+               if (o.banned_reason or "").startswith("routing could not"))
+
+
 def parse_options(
     html: str,
     *,

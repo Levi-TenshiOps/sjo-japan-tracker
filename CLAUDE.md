@@ -393,6 +393,35 @@ about four minutes, six times a day - roughly 18 windows out of ~900. Taking
 and releasing per launch would recover that and add a lot of lock churn for
 a rounding error.
 
+## Completeness has two halves, and only one was measured
+
+Coverage *of windows* is guaranteed: the check ledger and its invariant mean
+no date is silently written off. That says nothing about completeness
+*within* a window, and there are two ways to miss a fare on a date that was
+checked. Both were invisible until 2026-08-24.
+
+**Google says how many results it has.** The page prose carries "16 results
+returned" and a "View more flights" control that `--dump-dom` cannot click.
+Measured 2026-08-23, a live page claimed 16 while the parser found 13.
+`claimed_result_count` reads that number and both Chrome paths log a
+shortfall; the sweep counts them in `store.shortfalls` and `--status` shows
+it. Re-querying with `max_price` caps has shown the hidden rows are the dear
+ones, so this is a monitor rather than a fix - but a silent shortfall is
+indistinguishable from a window that genuinely had fewer fares.
+
+**An unreadable routing is dropped, not rejected.** `banned_reason` fails
+closed when it cannot see the connecting airports, which is right - the visa
+rule cannot be checked on a routing nobody can read. But that is a fare we
+might have been able to book, thrown away for a parsing reason, and it was
+being counted alongside genuine visa rejections in the same "N
+visa-rejected" log line. `unreadable_count` separates them and the sweep
+counts them in `store.unreadable`.
+
+**Neither is fixed by detecting it.** The point is that both stop being
+unknowable. If either number starts climbing, something in Google's markup
+has moved and fares are going missing - and we will see it in `--status`
+rather than inferring it months later from a suspiciously quiet month.
+
 ## An empty answer is evidence of nothing unless you record the weather
 
 The trip owner's rule: **never leave a possible cheap flight untracked.**
