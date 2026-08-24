@@ -730,12 +730,48 @@ MAX_CHECKED = 6000
 
 
 def looks_throttled(recent: Sequence[int], *, window: int = EMPTY_ALARM_WINDOW,
-                    rate: float = EMPTY_ALARM_RATE) -> bool:
-    """True when the recent empty rate is too high to be honest."""
+                    rate: float = EMPTY_ALARM_RATE,
+                    blank: Sequence[int] | None = None) -> bool:
+    """True when Google appears to be refusing rather than answering.
+
+    A high fast-empty rate is necessary but not sufficient, and `blank` is
+    what makes it sufficient: **a throttle takes everything down**. If any
+    page in the same stretch came back with fares on it, the connection is
+    working and the empties are the calendar. That is the same rule
+    `cli.run_looks_blocked` already applies to a scheduled run, and the
+    sweep's own detector did not have it.
+
+    It matters because the timing premise this detector rests on is not
+    holding. Measured 2026-08-24, after `elapsed` was fixed to time the
+    fetch rather than the wait for the lock:
+
+        pages that returned fares    13.2s  14.4s  19.1s  26.0s
+        pages with no fares           3.8s  3.9s  4.1s  4.1s  4.4s ...
+
+    Tight, non-overlapping clusters - and the empties were consecutive
+    return dates on one departure day, interleaved with windows that
+    answered with seventeen results. That is a calendar, not a refusal.
+    The file's original premise, "a date Google genuinely has no flights
+    for still costs it the time to say so", is simply false on this
+    machine now: an empty page is *always* fast. So a fast-empty rate on
+    its own measures the calendar, exactly like the plain-empty rate it
+    was brought in to replace.
+
+    Rather than move the threshold again - the third time would be the
+    third guess - this asks the question the data can actually answer.
+    It can only ever make the detector quieter, which is the agreed
+    direction to be wrong in.
+    """
     sample = list(recent)[-window:]
     if len(sample) < window:
         return False
-    return (sum(sample) / len(sample)) > rate
+    if (sum(sample) / len(sample)) <= rate:
+        return False
+    if blank is not None:
+        seen = list(blank)[-window:]
+        if any(b == 0 for b in seen):
+            return False
+    return True
 
 
 def resume_index(windows: Sequence, store: "SweepStore") -> int:
@@ -898,7 +934,8 @@ def sweep_batch(
         # throttle - and draining one per launch would stall the cold
         # rotation for a day and a half, trading one blind spot for
         # another.
-        healthy = not looks_throttled(store.recent)
+        healthy = not looks_throttled(store.recent,
+                                      blank=store.recent_blank)
         recheck_turn = store.windows_priced % RECHECK_EVERY == 0
         if store.suspect and healthy and recheck_turn:
             key = store.suspect.pop(0)
@@ -1090,7 +1127,8 @@ def sweep_batch(
                 del store.recent[:-EMPTY_ALARM_WINDOW * 2]
             store.recent_blank.append(0 if parsed else 1)
             del store.recent_blank[:-EMPTY_ALARM_WINDOW * 2]
-        throttled = looks_throttled(store.recent)
+        throttled = looks_throttled(store.recent,
+                                    blank=store.recent_blank)
 
         # An empty answer used to leave no trace anywhere: nothing is written
         # to sweep_history, and `found` only holds windows that produced a

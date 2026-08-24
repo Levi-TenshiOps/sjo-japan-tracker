@@ -2158,3 +2158,55 @@ class TestTheLedgerSeparatesBlankFromUnusable:
                     sleep=lambda _: None, delay_s=0)
         rec = next(iter(s.checked.values()))
         assert rec["blank"] is True and rec["empty"] is True
+
+
+class TestAThrottleTakesEverythingDown:
+    """A stretch containing pages that returned fares is not a throttle.
+
+    The live sweep raised "65% of the last 20 windows came back empty
+    *fast*" at 16:50 on 2026-08-24. It was not a throttle. Read from the
+    ledger rather than by making more requests - the one thing this
+    project has learned never to do - the same minutes looked like this:
+
+        22:38:48  2027-01-30 +28n   19.1s   fares
+        22:40:22  2026-11-11 +34n    4.1s   empty
+        22:48:54  2027-02-02 +33n   26.0s   17 results
+        22:50:27  2026-11-11 +37n    3.9s   empty
+
+    The empties were consecutive return dates on one departure day,
+    interleaved with windows answering in full. Google was answering.
+    """
+
+    def test_a_success_in_the_window_clears_the_verdict(self):
+        fast_empties = [1] * 20
+        assert looks_throttled(fast_empties), "the rate alone still trips"
+        blank = [1] * 19 + [0]          # one page came back with fares
+        assert not looks_throttled(fast_empties, blank=blank)
+
+    def test_a_real_throttle_still_trips(self):
+        """Nothing answered at all, which is what a refusal looks like."""
+        assert looks_throttled([1] * 20, blank=[1] * 20)
+
+    def test_one_success_is_enough_wherever_it_falls(self):
+        for i in range(20):
+            blank = [1] * 20
+            blank[i] = 0
+            assert not looks_throttled([1] * 20, blank=blank), i
+
+    def test_successes_outside_the_window_do_not_count(self):
+        """Yesterday's healthy page says nothing about now."""
+        blank = [0] * 20 + [1] * 20
+        assert looks_throttled([1] * 40, blank=blank)
+
+    def test_omitting_blank_keeps_the_old_behaviour(self):
+        assert looks_throttled([1] * 20)
+        assert not looks_throttled([0] * 20)
+
+    def test_a_short_sample_is_still_never_a_throttle(self):
+        assert not looks_throttled([1] * 3, blank=[1] * 3)
+
+    def test_the_live_shape_is_not_a_throttle(self):
+        """13 fast empties and 4 full pages, as actually measured."""
+        recent = [1] * 13 + [0] * 7
+        blank = [1] * 13 + [0, 1, 0, 1, 0, 1, 0]
+        assert not looks_throttled(recent, blank=blank)

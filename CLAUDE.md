@@ -491,6 +491,40 @@ Do not read the percentages before twenty samples have accumulated.
 "50%" on n=2 is noise and nothing is acting on it - but it is on screen and
 invites the wrong conclusion.
 
+### The timing premise is false, and a third threshold would be a third guess
+
+The live sweep raised "65% of the last 20 windows came back empty *fast*"
+at 16:50 on 2026-08-24, minutes after `elapsed` was fixed to time the
+fetch instead of the wait for the lock. The padding had been masking it.
+
+It was not a throttle. Diagnosed from the ledger rather than by making
+more requests - the one thing this file says never to do:
+
+    22:38:48  2027-01-30 +28n   19.1s   fares
+    22:40:22  2026-11-11 +34n    4.1s   empty
+    22:48:54  2027-02-02 +33n   26.0s   17 results
+    22:50:27  2026-11-11 +37n    3.9s   empty
+
+The empties were **consecutive return dates on one departure day**,
+interleaved with windows answering in full. Across 110 checks the two
+populations do not overlap at all: pages with fares 9.0-26.8s, pages
+without 3.6-4.6s.
+
+So the premise this detector was rebuilt on - *"a date Google genuinely
+has no flights for still costs it the time to say so"* - is false on this
+machine. **An empty page is always fast.** A fast-empty rate therefore
+measures the calendar, exactly like the plain-empty rate it replaced. The
+costume changed; the mistake did not.
+
+Moving the threshold a third time would be a third guess. The question the
+data *can* answer is the one `cli.run_looks_blocked` already asks of a
+scheduled run: **a throttle takes everything down.** `looks_throttled` now
+takes `blank` as well, and a stretch containing any page that returned
+fares is not a throttle whatever the timings say. It can only ever make
+the detector quieter, which is the agreed direction to be wrong in.
+
+The thresholds themselves are untouched, and stay frozen.
+
 ### The detector is frozen until there is data to change it with
 
 Agreed with the trip owner 2026-08-24. **Do not tune it further on
