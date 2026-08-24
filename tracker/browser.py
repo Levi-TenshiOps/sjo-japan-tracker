@@ -288,6 +288,29 @@ def dom_price_order(html: str) -> list[int]:
     return out
 
 
+def dom_row_count(html: str) -> int:
+    """How many result rows are physically in the DOM.
+
+    The decisive number for the truncation gap. Google says "16 results
+    returned" and the parser produces 13, and there are two very different
+    explanations:
+
+    * the three rows are not in the page at all, behind the "View more
+      flights" control that `--dump-dom` cannot click - nothing to be done
+      short of a different query; or
+    * they *are* in the page and `parse_options` is dropping them - a
+      parser bug, fixable for free, and costing us fares.
+
+    Counting the rows separates the two, and costs nothing: the DOM is
+    already in hand.
+    """
+    if not html:
+        return 0
+    tree = LexborHTMLParser(html)
+    rows = tree.css("li.pIav2d") or tree.css("ul.Rk10dc li") or tree.css("li")
+    return len(rows)
+
+
 def unreadable_count(options) -> int:
     """Options dropped because their routing could not be read.
 
@@ -308,6 +331,7 @@ def parse_options(
     depart_date: Date,
     return_date: Date,
     deep_link: str = "",
+    stats: dict | None = None,
 ) -> list[BrowserOption]:
     """Every priced result in a rendered DOM, cheapest first.
 
@@ -329,6 +353,8 @@ def parse_options(
             n.attributes.get("aria-label", "") or "" for n in row.css("[aria-label]"))
         master = _MASTER.search(labels)
         if not master:
+            if stats is not None:
+                stats["unmatched"] = stats.get("unmatched", 0) + 1
             continue
         price = int(master.group(1).replace(",", ""))
         airline = master.group(3).strip()
@@ -353,7 +379,16 @@ def parse_options(
         )
         fingerprint = (opt.price_usd, opt.stops, opt.airlines, opt.total_minutes)
         if fingerprint in seen:
-            continue                      # the DOM repeats each row's summary
+            # The DOM repeats each row's summary, so this is mostly real
+            # de-duplication. It also collapses two genuinely different
+            # departure times that share a price, routing, airline and
+            # duration - which costs nothing for finding the cheapest fare,
+            # but does inflate the apparent gap between what Google says it
+            # returned and what we parsed. Counted so the two can be told
+            # apart.
+            if stats is not None:
+                stats["duplicate"] = stats.get("duplicate", 0) + 1
+            continue
         seen.add(fingerprint)
         out.append(opt)
 

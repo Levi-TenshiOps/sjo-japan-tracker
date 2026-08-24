@@ -18,6 +18,7 @@ import pytest
 
 from tracker.browser import (
     BrowserOption, chrome_path, claimed_result_count, dom_price_order,
+    dom_row_count,
     fetch_dom, parse_options,
     unreadable_count, visa_free,
 )
@@ -268,3 +269,63 @@ class TestTheDetectorCannotManufactureGoodNews:
     def test_the_real_page_still_reads(self):
         html = io.open(FIXTURE, encoding="utf-8").read()
         assert len(dom_price_order(html)) == 5
+
+
+class TestWhyARowIsSkipped:
+    """The truncation gap has two halves and only one of them is a problem.
+
+    "Google claims 16, we parsed 13" was being read as three fares lost
+    behind the un-clickable "View more flights" control. There are two other
+    possibilities, and they are not the same thing at all:
+
+    * the row is in the DOM and its aria-label does not match - a parser
+      bug, fixable for free, and genuinely costing fares;
+    * the row is a duplicate of one already taken - same price, routing,
+      airline and duration - which for the purpose of finding the cheapest
+      fare is the same deal twice, and costs nothing.
+
+    Counting them apart is what turns a worrying number into a decidable
+    one.
+    """
+
+    def test_stats_are_optional(self):
+        html = io.open(FIXTURE, encoding="utf-8").read()
+        parse_options(html, origin="SJO", destination="NRT",
+                      depart_date=DEPART, return_date=RETURN)   # no stats
+
+    def test_duplicates_are_counted_not_silent(self):
+        """Two rows identical in every field the fingerprint uses."""
+        row = ('<li class="pIav2d"><div aria-label="From 1500 US dollars '
+               'round trip total. 1 stop flight with SWISS. '
+               'Total duration 12 hr 30 min.">1 stop in ZRH</div></li>')
+        html = f"<html><body><ul class='Rk10dc'>{row}{row}</ul></body></html>"
+        stats = {}
+        opts = parse_options(html, origin="SJO", destination="NRT",
+                             depart_date=DEPART, return_date=RETURN,
+                             stats=stats)
+        assert len(opts) == 1
+        assert stats.get("duplicate") == 1
+        assert dom_row_count(html) == 2
+
+    def test_an_unreadable_row_is_counted_apart_from_a_duplicate(self):
+        """This is the half that would be a real loss."""
+        good = ('<li class="pIav2d"><div aria-label="From 1500 US dollars '
+                'round trip total. 1 stop flight with SWISS. '
+                'Total duration 12 hr 30 min.">1 stop in ZRH</div></li>')
+        junk = '<li class="pIav2d"><div aria-label="something else">x</div></li>'
+        html = f"<html><body><ul class='Rk10dc'>{good}{junk}</ul></body></html>"
+        stats = {}
+        parse_options(html, origin="SJO", destination="NRT",
+                      depart_date=DEPART, return_date=RETURN, stats=stats)
+        assert stats.get("unmatched") == 1
+        assert stats.get("duplicate") is None
+
+    def test_the_real_page_loses_nothing(self):
+        """Five rows in, five options out, nothing skipped for either reason."""
+        html = io.open(FIXTURE, encoding="utf-8").read()
+        stats = {}
+        opts = parse_options(html, origin="SJO", destination="NRT",
+                             depart_date=DEPART, return_date=RETURN,
+                             stats=stats)
+        assert len(opts) == dom_row_count(html) == 5
+        assert stats == {}

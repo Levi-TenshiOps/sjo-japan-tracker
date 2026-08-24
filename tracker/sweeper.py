@@ -48,7 +48,7 @@ from . import gate
 from . import history as history_mod
 from .browser import (
     BrowserOption, chrome_path, claimed_result_count, dom_price_order,
-    fetch_dom, parse_options, unreadable_count,
+    dom_row_count, fetch_dom, parse_options, unreadable_count,
 )
 from .verify import booking_link, within_duration
 
@@ -176,6 +176,14 @@ class SweepStore:
     # the search span. The only way a queued window leaves without
     # being priced, so it is counted rather than silent.
     dropped_rechecks: int = 0
+    # Result rows physically present in the DOM that `parse_options`
+    # did not turn into an option. Distinct from rows Google never
+    # sent: this half would be a parser bug, and fixable for free.
+    rows_missed_by_parser: int = 0
+    # Rows collapsed as duplicates. Harmless for finding the cheapest
+    # fare - a second option at the same price, routing, airline and
+    # duration is the same deal - but it inflates the apparent gap.
+    rows_deduped: int = 0
     # Of the shortfall windows, how many had Google's rows in
     # ascending price order. If they always are, the rows behind the
     # un-clickable control are the dearest and a shortfall is
@@ -888,8 +896,10 @@ def sweep_batch(
 
         # Parse once, then filter, so the shortfall check can see what was
         # dropped and why. Filtering inside the comprehension hid both.
+        stats: dict = {}
         parsed = parse_options(dom, origin=origin, destination=destination,
-                               depart_date=depart, return_date=ret)
+                               depart_date=depart, return_date=ret,
+                               stats=stats)
         options = [o for o in parsed
                    if o.visa_ok and within_duration(o, max_total_hours)]
         claimed = claimed_result_count(dom)
@@ -913,8 +923,18 @@ def sweep_batch(
                 verdict = "row order ascending"
             else:
                 verdict = "row order NOT ascending"
-            log.info("%s +%dn: Google claims %d results, parsed %d (%s)",
-                     depart, (ret - depart).days, claimed, len(parsed), verdict)
+            # Three numbers, because the gap between the first two has two
+            # completely different causes and only `rows` tells them apart.
+            rows = dom_row_count(dom)
+            dup = stats.get("duplicate", 0)
+            unmatched = stats.get("unmatched", 0)
+            if unmatched:
+                store.rows_missed_by_parser += unmatched
+            store.rows_deduped += dup
+            log.info("%s +%dn: Google claims %d, DOM %d rows, parsed %d "
+                     "(%d duplicate, %d unreadable) - %s",
+                     depart, (ret - depart).days, claimed, rows, len(parsed),
+                     dup, unmatched, verdict)
         blind = unreadable_count(parsed)
         if blind:
             store.unreadable += blind
