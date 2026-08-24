@@ -110,6 +110,20 @@ def select_top(
             chosen.append(itin)
             chosen_ids.add(id(itin))
 
+    # The cheapest fare found must appear, whatever month it is in. The
+    # quota shapes *membership*, and it is allowed to push a dearer priority
+    # option in ahead of a cheaper one - but never to hide the best number
+    # of the whole run, which is the one thing the email exists to report.
+    #
+    # Property-tested 2026-08-23 over 3,000 random selections: 390 lost it.
+    # Not at the live settings (count=20, share=0.5 lost it in 0 of 4,000),
+    # but `result_count: 1` or `priority_share: 1.0` are both permitted by
+    # validation and both reserve every slot, so the guarantee cannot be
+    # left resting on the numbers happening to be kind.
+    if ranked and chosen and id(ranked[0]) not in chosen_ids:
+        chosen[-1] = ranked[0]          # displace the dearest row, not a cheap one
+        chosen_ids = {id(i) for i in chosen}
+
     chosen.sort(key=lambda i: (i.price_usd, i.outbound_duration_min))
     n_priority = sum(1 for i in chosen if is_priority(i))
 

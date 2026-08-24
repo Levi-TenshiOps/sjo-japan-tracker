@@ -72,9 +72,61 @@ class TestQuota:
         assert sel.priority_count == 0
 
     def test_share_of_one_fills_with_priority_first(self):
+        """...but never at the cost of the single cheapest fare.
+
+        Reserving every slot used to hide it. CLAUDE.md is unconditional:
+        "the single cheapest fare found must always appear regardless of its
+        month". So 19 of the 20 rows are priority and the twentieth is the
+        $900, which is the whole reason the email is being sent.
+        """
         items = [make(900 + n, 6) for n in range(30)]
         items += [make(1500 + n, 2) for n in range(30)]
-        assert pick(items, share=1.0).priority_count == 20
+        sel = pick(items, share=1.0)
+        assert sel.priority_count == 19
+        assert min(i.price_usd for i in sel.items) == 900
+
+
+class TestTheCheapestFareAlwaysSurvives:
+    """Non-negotiable #4, enforced rather than hoped for.
+
+    Property-tested 2026-08-23 across 3,000 random selections: 390 lost the
+    cheapest fare. Not at the live settings - count=20 with share=0.5 lost
+    it in 0 of 4,000 - but `result_count: 1` and `priority_share: 1.0` are
+    both accepted by validation, and both reserve every slot. An invariant
+    that holds only because the numbers happen to be kind is not an
+    invariant.
+    """
+
+    def test_one_slot_still_shows_the_cheapest(self):
+        items = [make(900, 6), make(1500, 1), make(1600, 2)]
+        sel = pick(items, count=1, share=1.0)
+        assert [i.price_usd for i in sel.items] == [900]
+
+    @pytest.mark.parametrize("count", [1, 2, 5, 20])
+    @pytest.mark.parametrize("share", [0.0, 0.25, 0.5, 0.75, 1.0])
+    def test_across_every_count_and_share(self, count, share):
+        items = [make(900 + n, 6) for n in range(10)]
+        items += [make(1500 + n, 1) for n in range(10)]
+        sel = pick(items, count=count, share=share)
+        assert min(i.price_usd for i in sel.items) == 900
+
+    def test_the_list_is_still_cheapest_first(self):
+        """Forcing a row in must not break the ordering guarantee."""
+        items = [make(900 + n, 6) for n in range(10)]
+        items += [make(1500 + n, 1) for n in range(10)]
+        sel = pick(items, count=5, share=1.0)
+        prices = [i.price_usd for i in sel.items]
+        assert prices == sorted(prices)
+
+    def test_it_displaces_the_dearest_row_not_a_cheap_one(self):
+        items = [make(900, 6), make(1500, 1), make(1600, 1), make(1700, 1)]
+        sel = pick(items, count=3, share=1.0)
+        assert [i.price_usd for i in sel.items] == [900, 1500, 1600]
+
+    def test_nothing_changes_when_the_cheapest_is_already_in(self):
+        items = [make(900, 1), make(1500, 1), make(1600, 6)]
+        sel = pick(items, count=3, share=0.5)
+        assert [i.price_usd for i in sel.items] == [900, 1500, 1600]
 
 
 class TestEdgeCases:
