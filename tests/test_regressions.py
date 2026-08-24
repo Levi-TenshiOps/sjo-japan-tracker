@@ -267,7 +267,7 @@ class TestGoogleBandsFromARealPayload:
         google = PriceBands(low=1000, high=3000, usual=1500, source="GOOGLE")
         chosen = resolve_bands(google_bands=google,
                                history_prices=[1200] * 40, history_days=9)
-        assert chosen.source == "GOOGLE"
+        assert chosen.source == "SEED"
 
     def test_median_bands_ignores_one_odd_route(self):
         readings = [

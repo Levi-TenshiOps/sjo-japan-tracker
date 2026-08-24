@@ -457,6 +457,21 @@ re-walks them.
    demoted the GOOGLE source. $1,347 - the best fare in eight months - was
    classified TYPICAL. Recalibrated to visa-free percentiles, and the email
    stopped claiming the median was "what travellers usually pay".
+
+   **That fixed only half of it, and the trip owner caught the other half**
+   by reading a live email and asking whether "$1,052 / $3,765" were real.
+   They were read correctly out of Google's payload and were wrong for the
+   reader: GOOGLE still outranked SEED, and HISTORY needs five distinct
+   days, so Google was what the email actually used. Against 1,249
+   visa-free observations that band called **0 of them cheap** - the green
+   zone sat below the cheapest fare ever found, so the bar had three
+   colours and could only ever paint one. GOOGLE is no longer a band source
+   at all; it is logged for comparison and nothing else. `resolve_bands` is
+   HISTORY, then SEED.
+
+   The rule worth keeping: **a band the data cannot reach is a broken
+   gauge.** `TestTheCheapBandMustBeReachable` asserts the cheap cut-off
+   stays above the best fare ever seen.
 11. **`max_total_hours` did nothing on the Chrome path**, which is the path
     that decides the alert price.
 12. **`max_requests_per_run` did nothing at all**, while describing itself

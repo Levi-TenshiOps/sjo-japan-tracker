@@ -395,6 +395,16 @@ def run(argv: list[str] | None = None) -> int:
     )
     log.info("Bands (%s): cheap < %s, expensive > %s", bands.source,
              format_price(bands.low), format_price(bands.high))
+    # Google's own range is still worth recording even though it no longer
+    # labels anything: a shift in it is real news about the market. It is
+    # not used for classification because it describes every routing Google
+    # sells, including the US and Canada transits that are not bookable
+    # here - measured 2026-08-23, it called 0 of 1,249 visa-free fares cheap.
+    if google_bands is not None:
+        log.info("Google's own range for comparison: %s-%s (usual %s); "
+                 "includes routings this passport cannot use",
+                 format_price(google_bands.low), format_price(google_bands.high),
+                 format_price(google_bands.usual) if google_bands.usual else "n/a")
 
     best = accepted[0]
     log.info("Cheapest: %s %s %s -> %s", format_price(best.price_usd),

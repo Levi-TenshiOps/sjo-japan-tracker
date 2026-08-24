@@ -100,9 +100,26 @@ class TestHistoryBands:
 
 
 class TestResolve:
-    def test_prefers_google(self):
+    def test_never_prefers_google(self):
+        """Google's range is never used to label a fare. Demoted 2026-08-23.
+
+        Its insights cover every routing Google sells, including the US and
+        Canadian transits this passport cannot legally use. Those are the
+        cheap ones, so they drag the band down: measured against 1,249
+        visa-free observations, a live Google band of $1,052/$1,640/$3,765
+        classified **0 of them as cheap**. Not few - none. Its cheap cut-off
+        sits below the cheapest visa-free fare found in eight months, so the
+        green band was unreachable and $1,347, the best fare this project
+        has ever seen, rendered as "typical".
+
+        Demoting it below HISTORY earlier the same day fixed only half of
+        it, because HISTORY needs 5 distinct days and Google was what the
+        email used until then.
+        """
         g = PriceBands(low=1, high=2, usual=None, source="GOOGLE")
-        assert resolve_bands(google_bands=g, history_prices=[1] * 100) is g
+        assert resolve_bands(google_bands=g).source == "SEED"
+        assert resolve_bands(google_bands=g, history_prices=[1200, 1300],
+                             history_days=1).source == "SEED"
 
     def test_falls_back_to_history(self):
         prices = list(range(1000, 1000 + MIN_HISTORY_POINTS * 10, 10))
@@ -149,3 +166,38 @@ class TestHistoryNeedsMultipleDays:
         """Callers that cannot count days keep the old behaviour."""
         prices = list(range(1000, 1000 + MIN_HISTORY_POINTS * 10, 10))
         assert bands_from_history(prices) is not None
+
+
+class TestTheCheapBandMustBeReachable:
+    """A colour the data can never paint is a broken gauge.
+
+    The trip owner questioned the numbers in a live email - "$1,052 /
+    $3,765, are those really accurate?" - and they were accurately read
+    from Google's payload while being wrong for the reader. Google's
+    insights cover routings through the US and Canada that a Costa Rican
+    passport cannot use without a consular transit visa. Those are the
+    cheap ones, so the band sat far below anything bookable.
+    """
+
+    GOOGLE = PriceBands(low=1052, high=3765, usual=1640, source="GOOGLE")
+
+    def test_googles_cheap_cutoff_is_below_anything_bookable(self):
+        """$1,347 is the cheapest visa-free fare found in eight months."""
+        assert self.GOOGLE.low < 1347
+        assert self.GOOGLE.classify(1347) == "TYPICAL"
+
+    def test_our_own_bands_call_that_fare_cheap(self):
+        assert SEED_BANDS.classify(1347) == "CHEAP"
+
+    def test_the_cheap_band_is_reachable_at_all(self):
+        """The real defect: a green zone no observed fare could enter."""
+        assert SEED_BANDS.low > 1347, (
+            "the cheap cut-off must sit above the best fare ever seen, or "
+            "nothing can ever be labelled cheap")
+
+    def test_the_alert_threshold_lands_in_the_cheap_band(self):
+        """A fare worth emailing about should not read as ordinary."""
+        assert SEED_BANDS.classify(1400) == "CHEAP"
+
+    def test_resolve_never_hands_google_to_the_email(self):
+        assert resolve_bands(google_bands=self.GOOGLE).source != "GOOGLE"

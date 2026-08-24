@@ -122,14 +122,17 @@ class TestBaselinePrefersOurOwnVerifiedPrices:
         google = PriceBands(low=900, high=3000, usual=1800, source="GOOGLE")
         got = resolve_bands(google_bands=google, history_prices=prices,
                             history_days=1)
-        assert got.source == "GOOGLE"
+        assert got.source == "SEED", (
+            "one day of data describes a snapshot, so HISTORY is refused - "
+            "but the fallback is the visa-free seed, not Google's band, "
+            "which labels 0 of 1,249 bookable fares cheap")
 
     def test_too_few_observations_falls_back(self):
         from tracker.pricing import PriceBands, resolve_bands
         google = PriceBands(low=900, high=3000, usual=1800, source="GOOGLE")
         got = resolve_bands(google_bands=google, history_prices=[2000, 2100],
                             history_days=9)
-        assert got.source == "GOOGLE"
+        assert got.source == "SEED"
 
     def test_seed_remains_the_last_resort(self):
         from tracker.pricing import resolve_bands

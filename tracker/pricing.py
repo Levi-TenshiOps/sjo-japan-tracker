@@ -200,8 +200,33 @@ def resolve_bands(
         derived = bands_from_history(history_prices, distinct_days=history_days)
         if derived is not None:
             return derived
-    if google_bands is not None:
-        return google_bands
+
+    # GOOGLE now ranks *below* the seed, not above it. Demoting it below
+    # HISTORY on 2026-08-23 fixed only half the problem, because until
+    # HISTORY has 5 distinct days - which takes most of a week - Google was
+    # still what the email used.
+    #
+    # Measured against 1,249 visa-free observations of this route, with a
+    # live band of low $1,052 / usual $1,640 / high $3,765:
+    #
+    #     visa-free fares Google would call CHEAP:  0 of 1,249  (0.0%)
+    #
+    # Not "few". None. Google's cheap cut-off sits below the cheapest
+    # visa-free fare found in eight months of searching ($1,347), so the
+    # green band is unreachable and the bar has three colours it can only
+    # ever paint one of. $1,347 - the best fare this project has ever seen -
+    # rendered as "typical".
+    #
+    # The cause is the same one that demoted it before: Google's insights
+    # describe every routing it sells, including the US and Canadian
+    # transits this traveller cannot legally take. Those routings are
+    # cheaper, so they drag the whole band down. The seed is the same
+    # percentiles computed on fares that are actually bookable.
+    #
+    # `google_bands` is still accepted and still parsed out of the payload,
+    # because it is worth logging - a sudden shift in Google's own range is
+    # real information about the market. It just no longer decides how a
+    # fare is labelled to the reader.
     return SEED_BANDS
 
 
