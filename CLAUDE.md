@@ -491,6 +491,32 @@ Do not read the percentages before twenty samples have accumulated.
 "50%" on n=2 is noise and nothing is acting on it - but it is on screen and
 invites the wrong conclusion.
 
+### The detector is frozen until there is data to change it with
+
+Agreed with the trip owner 2026-08-24. **Do not tune it further on
+reasoning.**
+
+Three of the day's own bugs came from changing it: the re-check queue fed
+its own empties back into the health sample, the fix for that keyed off
+`replay` and so excluded the successful hot and warm picks too, and the
+migration that was meant to drop stale samples could not fire because the
+previous run had already mixed the two formats in one list. Each change was
+cheap to make and expensive to verify, and each looked obviously right at
+the time.
+
+It is currently conservative: it will miss a throttle before inventing one,
+which is the correct way to be wrong immediately after two false alarms.
+
+The safety net is not the detector anyway, and that is the point:
+
+* `alarm.hours_since_last_email` catches the *product* dying whatever the
+  detector believes.
+* The four-state coverage invariant guarantees no date is written off, even
+  during a throttle nobody noticed.
+
+So let `secs` accumulate for a day or two, then set the threshold from the
+observed distribution. Anything sooner is another guess wearing a number.
+
 ## The reboot launcher was still armed at --delay 6
 
 Found 2026-08-24, live on the machine, and the nastiest kind of bug: one
