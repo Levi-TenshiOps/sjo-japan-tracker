@@ -1240,17 +1240,41 @@ def sweep_batch(
                         "re-check once it clears.",
                         rate, EMPTY_ALARM_WINDOW, SUSPECT_FAST_SECONDS,
                         len(store.suspect))
-        elif store.throttled_since:
-            minutes = _age_hours(store.throttled_since) * 60
-            log.info("Empty rate back to normal after %.0f min; "
-                     "%d window(s) to re-check.", minutes, len(store.suspect))
-            if on_alarm is not None and store.alarm_sent_for:
-                _safe_alarm(on_alarm, "recovered", {
-                    "minutes": minutes, "suspect": len(store.suspect),
-                    "windows_priced": store.windows_priced})
-            store.alarm_sent_for = ""
-            store.throttled_since = ""
-            store.consecutive_rests = 0
+        elif store.throttled_since or store.alarm_sent_for:
+            # Not throttled now. Two separate things may need closing, and
+            # keying both off `throttled_since` was wrong: resting clears
+            # it, so an episode that was alarmed *and then rested* left
+            # `alarm_sent_for` set with nothing able to clear it. The
+            # all-clear then rode the next unrelated episode.
+            #
+            # Live on 2026-08-24: the 11:20 alarm rested, and its all-clear
+            # arrived at 16:55 - five and a half hours later - reporting
+            # "cleared after 5 minutes", which was the duration of a
+            # completely different blip that evening. The trip owner spotted
+            # it immediately: "the block was early today, weird".
+            #
+            # So recovery is keyed on the outstanding *alarm*, and its
+            # duration is measured from the episode that alarm was about.
+            #
+            # A rest also empties `recent`, so "not throttled" can simply
+            # mean "not enough samples yet". Waiting for a full window
+            # before declaring an all-clear costs about half an hour and
+            # keeps the message honest.
+            settled = len(store.recent) >= EMPTY_ALARM_WINDOW
+            if settled:
+                if store.throttled_since:
+                    log.info("Empty rate back to normal after %.0f min; "
+                             "%d window(s) to re-check.",
+                             _age_hours(store.throttled_since) * 60,
+                             len(store.suspect))
+                if store.alarm_sent_for and on_alarm is not None:
+                    _safe_alarm(on_alarm, "recovered", {
+                        "minutes": _age_hours(store.alarm_sent_for) * 60,
+                        "suspect": len(store.suspect),
+                        "windows_priced": store.windows_priced})
+                store.alarm_sent_for = ""
+                store.throttled_since = ""
+                store.consecutive_rests = 0
 
         # Jitter every wait. A request every six seconds on a perfect clock
         # is a fingerprint; nobody browses like a metronome.

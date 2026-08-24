@@ -1200,6 +1200,46 @@ frozen per the agreement above; this is the data that a later change
 should be made from, not a change. Re-run it once `secs` covers a day or
 two rather than an afternoon.
 
+## An all-clear that described a different throttle
+
+The trip owner caught this from the email alone, 2026-08-24: *"I got the
+email until now but the block was early today, weird."*
+
+They were right. The email said "The throttle cleared after 5 minutes" and
+arrived at 16:55. The throttle it was closing had started at **11:20**, and
+the five minutes belonged to an unrelated blip that evening.
+
+The chain:
+
+1. 11:20 - a throttle is detected, the alarm email goes out, and
+   `alarm_sent_for` is set to that episode's `throttled_since`.
+2. The sweep rests. The rest path clears `throttled_since` and **does not
+   clear `alarm_sent_for`**.
+3. The all-clear branch was keyed on `elif store.throttled_since:` - which
+   step 2 had just emptied - so that episode could never be closed. The
+   outstanding alarm sat there for five and a half hours.
+4. 16:50 - a new (and false) throttle sets `throttled_since` again.
+5. 16:55 - healthy again, the branch finally fires, sees the stale
+   `alarm_sent_for`, and reports the *new* episode's five minutes.
+
+Two mistakes, one line apart. The recovery was keyed on the **episode**
+when the thing that needs closing is the **alarm**; and its duration came
+from whichever episode happened to be open rather than the one the trip
+owner was told about.
+
+Recovery is now keyed on `alarm_sent_for`, and the duration is measured
+from it. A blip nobody was emailed about closes silently.
+
+One more thing had to come with it: a rest calls `store.recent.clear()`,
+so immediately afterwards "not throttled" only means "not enough samples
+yet". The all-clear now waits for a full `EMPTY_ALARM_WINDOW` again -
+about half an hour at 90s - which costs nothing and stops the email
+claiming a recovery it has not measured.
+
+**The general shape, worth carrying:** when a notification has an opening
+and a closing message, the closing one must be tied to the *same* event -
+not to whatever state happens to be set when it fires.
+
 ## Layout
 
 ```

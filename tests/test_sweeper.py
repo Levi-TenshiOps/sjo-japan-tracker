@@ -2210,3 +2210,70 @@ class TestAThrottleTakesEverythingDown:
         recent = [1] * 13 + [0] * 7
         blank = [1] * 13 + [0, 1, 0, 1, 0, 1, 0]
         assert not looks_throttled(recent, blank=blank)
+
+
+class TestTheAllClearMatchesTheAlarmItClears:
+    """An all-clear must describe the throttle it is closing.
+
+    Live on 2026-08-24: the 11:20 alarm rested, which cleared
+    `throttled_since` and left `alarm_sent_for` set with nothing able to
+    clear it. The all-clear finally rode a completely different blip that
+    evening and arrived at 16:55 - five and a half hours late - saying
+    "cleared after 5 minutes", which was the evening blip's duration.
+
+    The trip owner spotted it from the email alone: "the block was early
+    today, weird".
+    """
+
+    def _sent(self):
+        out = []
+        return out, (lambda kind, facts: out.append((kind, facts)))
+
+    def test_an_alarm_that_rested_is_still_closed_afterwards(self):
+        """The exact shape that stayed open for five and a half hours."""
+        sent, on_alarm = self._sent()
+        s = SweepStore()
+        s.alarm_sent_for = "2026-08-24T17:20:16+00:00"   # alarmed, then rested
+        s.throttled_since = ""                            # the rest cleared it
+        s.recent = [0] * EMPTY_ALARM_WINDOW               # healthy again
+        sweep_batch(windows(1), s, batch=1, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0, on_alarm=on_alarm)
+        kinds = [k for k, _ in sent]
+        assert "recovered" in kinds, "the outstanding alarm was never closed"
+        assert s.alarm_sent_for == ""
+
+    def test_the_duration_comes_from_the_alarmed_episode(self):
+        sent, on_alarm = self._sent()
+        s = SweepStore()
+        s.alarm_sent_for = "2026-08-24T12:00:00+00:00"    # hours ago
+        s.throttled_since = "2026-08-24T22:50:00+00:00"   # a later blip
+        s.recent = [0] * EMPTY_ALARM_WINDOW
+        sweep_batch(windows(1), s, batch=1, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0, on_alarm=on_alarm)
+        facts = dict(next(f for k, f in sent if k == "recovered"))
+        # Measured from the alarm's own episode, so hours - not the five
+        # minutes of the unrelated blip.
+        assert facts["minutes"] > 60, facts
+
+    def test_no_alarm_means_no_all_clear(self):
+        """A blip nobody was told about needs no email."""
+        sent, on_alarm = self._sent()
+        s = SweepStore()
+        s.alarm_sent_for = ""
+        s.throttled_since = "2026-08-24T22:50:00+00:00"
+        s.recent = [0] * EMPTY_ALARM_WINDOW
+        sweep_batch(windows(1), s, batch=1, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0, on_alarm=on_alarm)
+        assert [k for k, _ in sent if k == "recovered"] == []
+        assert s.throttled_since == ""
+
+    def test_it_waits_for_a_full_sample_before_declaring_all_clear(self):
+        """A rest empties `recent`; two quiet windows prove nothing."""
+        sent, on_alarm = self._sent()
+        s = SweepStore()
+        s.alarm_sent_for = "2026-08-24T12:00:00+00:00"
+        s.recent = []                                     # just rested
+        sweep_batch(windows(1), s, batch=1, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0, on_alarm=on_alarm)
+        assert [k for k, _ in sent if k == "recovered"] == []
+        assert s.alarm_sent_for != "", "closed the alarm on no evidence"
