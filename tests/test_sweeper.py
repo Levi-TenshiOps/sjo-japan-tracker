@@ -1152,3 +1152,96 @@ class TestTheWarmTier:
                 s.cursor += 1
             s.windows_priced += 1
         assert s.cursor > 150, f"cold cursor barely moved: {s.cursor}"
+
+
+class TestNoWindowIsQuietlyWrittenOff:
+    """An empty answer must leave a trace, or a throttle erases evidence.
+
+    Found 2026-08-23. A window that returned nothing wrote nothing to
+    `sweep_history.csv` and nothing to `found`, so afterwards a genuine
+    empty and a throttled one were indistinguishable - which is exactly the
+    question that matters once a throttle clears. 1,440 of 1,673 walked
+    windows were in that state, ~960 of them in January and February, the
+    months holding every cheap fare found so far. None were queued for a
+    second look.
+    """
+
+    def _ws(self, n=6):
+        return windows(n)
+
+    def test_every_check_is_recorded_even_when_empty(self, dom):
+        ws = self._ws(3)
+        s = SweepStore()
+        sweep_batch(ws, s, batch=3, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        assert len(s.checked) == 3
+        assert all(v["empty"] for v in s.checked.values())
+
+    def test_a_find_is_recorded_as_not_empty(self, dom):
+        ws = self._ws(1)
+        s = SweepStore()
+        sweep_batch(ws, s, batch=1, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        rec = s.checked[ws[0].key]
+        assert rec["empty"] is False and rec["at"]
+
+    def test_a_window_with_a_fare_never_needs_rechecking(self, dom):
+        ws = self._ws(1)
+        s = SweepStore()
+        sweep_batch(ws, s, batch=1, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        assert sweeper.unverified_windows(ws, s) == []
+
+    def test_an_empty_checked_while_unhealthy_is_unverified(self):
+        ws = self._ws(2)
+        s = SweepStore(cursor=2)
+        s.checked = {ws[0].key: {"at": "2026-08-23T12:00:00+00:00",
+                                 "empty": True, "healthy": False},
+                     ws[1].key: {"at": "2026-08-23T12:00:00+00:00",
+                                 "empty": True, "healthy": True}}
+        assert sweeper.unverified_windows(ws, s) == [ws[0].key]
+
+    def test_a_window_never_recorded_at_all_counts_as_unverified(self):
+        """The pre-existing backlog: walked before the ledger existed."""
+        ws = self._ws(3)
+        s = SweepStore(cursor=3)
+        assert sweeper.unverified_windows(ws, s) == [w.key for w in ws]
+
+    def test_windows_beyond_the_cursor_are_not_claimed(self):
+        """They have not been walked yet; they are not missing, just future."""
+        ws = self._ws(6)
+        s = SweepStore(cursor=2)
+        assert len(sweeper.unverified_windows(ws, s)) == 2
+
+    def test_queueing_adds_them_and_does_not_duplicate(self):
+        ws = self._ws(3)
+        s = SweepStore(cursor=3)
+        assert sweeper.queue_unverified(ws, s) == 3
+        assert sweeper.queue_unverified(ws, s) == 0, "must not re-add"
+        assert len(s.suspect) == 3
+
+    def test_the_recheck_drain_cannot_starve_cold_coverage(self, dom):
+        """A 1,440-window backlog must not stop the rotation for a day.
+
+        Draining one per launch would trade one blind spot for another.
+        """
+        ws = self._ws(40)
+        s = SweepStore(cursor=0)
+        s.suspect = [w.key for w in ws[:20]]
+        s.found[ws[0].key] = {"depart": ws[0].depart.isoformat(),
+                              "ret": ws[0].back.isoformat(), "price_usd": 1347,
+                              "seen_at": datetime.now(timezone.utc).isoformat()}
+        sweep_batch(ws, s, batch=20, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        assert s.cursor > 5, (
+            f"cold cursor only reached {s.cursor}; the re-check backlog "
+            f"starved the rotation")
+
+    def test_the_ledger_stays_bounded(self, dom):
+        s = SweepStore()
+        s.checked = {f"k{i}": {"at": f"2026-08-23T00:00:{i % 60:02d}+00:00",
+                               "empty": True, "healthy": True}
+                     for i in range(sweeper.MAX_CHECKED + 50)}
+        sweep_batch(windows(1), s, batch=1, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0)
+        assert len(s.checked) <= sweeper.MAX_CHECKED

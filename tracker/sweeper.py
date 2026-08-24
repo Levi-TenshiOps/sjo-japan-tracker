@@ -161,6 +161,8 @@ class SweepStore:
     suspect: list = field(default_factory=list)
     throttle_events: int = 0
     warm_index: int = 0        # rotation over the schedule-plausible windows
+    # key -> {at, empty, healthy}. Every check, not just the finds.
+    checked: dict = field(default_factory=dict)
     consecutive_rests: int = 0
     throttled_since: str = ""
     last_throttle: str = ""
@@ -393,6 +395,41 @@ WARM_SHARE = 0.25          # keeps the ~220 plausible windows fresh daily
 WARM_PAIR_MULTIPLE = 1.15  # a pair qualifies on a fare within this of target
 
 
+def unverified_windows(windows: Sequence, store: "SweepStore") -> list[str]:
+    """Windows walked this pass that we cannot honestly call empty.
+
+    A window that returned nothing leaves no trace in `sweep_history.csv`
+    and none in `found`, so before the `checked` ledger existed a genuine
+    empty and a throttled one were indistinguishable afterwards. That is the
+    question that matters after a throttle, and it could not be asked.
+
+    Anything walked with no fare recorded and no trustworthy check behind it
+    counts as unverified. Measured 2026-08-23 after a day of throttling:
+    1,440 of 1,673 walked windows, ~960 of them in January and February -
+    the months holding every cheap fare found so far. All were written off
+    as "no fares on this date" and none were queued for a second look.
+    """
+    out = []
+    for w in windows[:min(store.cursor, len(windows))]:
+        if w.key in store.found:
+            continue                       # it produced a fare; nothing to do
+        rec = store.checked.get(w.key)
+        if rec is None or not rec.get("healthy"):
+            out.append(w.key)
+    return out
+
+
+def queue_unverified(windows: Sequence, store: "SweepStore", *,
+                     limit: int | None = None) -> int:
+    """Put unverified windows back in the re-check queue. Returns how many."""
+    already = set(store.suspect)
+    add = [k for k in unverified_windows(windows, store) if k not in already]
+    if limit is not None:
+        add = add[:limit]
+    store.suspect.extend(add)
+    return len(add)
+
+
 def promising_weekday_pairs(store: "SweepStore", *, threshold: int | None,
                             multiple: float = WARM_PAIR_MULTIPLE) -> set:
     """(depart weekday, return weekday) pairs that have produced a cheap fare.
@@ -508,6 +545,12 @@ THROTTLE_REST_SECONDS = 900    # full stop after this looks sustained
 # Observed 2026-08-23 doing exactly that for forty minutes.
 THROTTLE_REST_MAX = 3600
 JITTER_FRACTION = 0.25         # +/- this much on every delay
+# One launch in four goes to the re-check backlog, so recovering from a
+# throttle cannot starve the cold rotation.
+RECHECK_EVERY = 4
+# Bound on the per-window check ledger. Older entries fall off; they
+# describe a check too old to be worth trusting anyway.
+MAX_CHECKED = 6000
 
 
 def looks_throttled(recent: Sequence[int], *, window: int = EMPTY_ALARM_WINDOW,
@@ -631,8 +674,14 @@ def sweep_batch(
         # healthy again. Re-checking mid-throttle just collects another false
         # empty and teaches us nothing, which is why a plain retry counter
         # was not enough.
+        # Re-checks take a bounded share of launches. A backlog can be
+        # large - 1,440 windows were left unverified by the 2026-08-23
+        # throttle - and draining one per launch would stall the cold
+        # rotation for a day and a half, trading one blind spot for
+        # another.
         healthy = not looks_throttled(store.recent)
-        if store.suspect and healthy:
+        recheck_turn = store.windows_priced % RECHECK_EVERY == 0
+        if store.suspect and healthy and recheck_turn:
             key = store.suspect.pop(0)
             w = next((x for x in windows if x.key == key), None)
             if w is None:
@@ -693,6 +742,22 @@ def sweep_batch(
         store.recent.append(0 if options else 1)
         del store.recent[:-EMPTY_ALARM_WINDOW * 2]
         throttled = looks_throttled(store.recent)
+
+        # An empty answer used to leave no trace anywhere: nothing is written
+        # to sweep_history, and `found` only holds windows that produced a
+        # fare. So a genuine empty and a throttled one were indistinguishable
+        # afterwards, and there was no way to ask "which windows were checked
+        # while the connection was bad?" - which is exactly the question that
+        # matters after a throttle. Every check is now stamped.
+        store.checked[w.key] = {
+            "at": _now(),
+            "empty": not options,
+            "healthy": not throttled and elapsed >= SUSPECT_FAST_SECONDS,
+        }
+        if len(store.checked) > MAX_CHECKED:
+            for k in sorted(store.checked,
+                            key=lambda k: store.checked[k]["at"])[:len(store.checked) - MAX_CHECKED]:
+                del store.checked[k]
         # An empty answer is only trustworthy when the connection is healthy
         # AND the page took long enough to have really been rendered. Both
         # failing means "unverified", not "no fares". A replay that comes
