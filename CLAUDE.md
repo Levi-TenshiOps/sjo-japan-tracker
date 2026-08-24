@@ -473,6 +473,24 @@ Every check's elapsed time is stored in the ledger as `secs`, so the 4.5
 threshold can be re-derived from real data instead of resting forever on
 one afternoon's measurement.
 
+**First calibration, 2026-08-24, and it moves the ground under the
+threshold.** Pages that returned fares took 9.4 to 23.8 seconds, median
+12.5. The 3-4s-versus-6s measurement the threshold is built on came from a
+day when a good page took six. Whatever changed - machine, network, Chrome,
+Google - real pages now take roughly twice that.
+
+4.5s is therefore *conservative* rather than wrong: it sits far below
+anything a successful page has taken, so it will under-report a throttle
+before it over-reports one. That is the right direction to err in
+immediately after two false alarms, but it is an assumption with a shelf
+life. If `secs` shows successful pages climbing further, the threshold
+should become a fraction of the observed median rather than a constant.
+
+Do not read the percentages before twenty samples have accumulated.
+`looks_throttled` requires the full window and returns False below it, so a
+"50%" on n=2 is noise and nothing is acting on it - but it is on screen and
+invites the wrong conclusion.
+
 ## The reboot launcher was still armed at --delay 6
 
 Found 2026-08-24, live on the machine, and the nastiest kind of bug: one
