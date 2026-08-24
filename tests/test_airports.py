@@ -75,3 +75,70 @@ class TestAllowList:
     def test_hub_codes_unique(self):
         codes = [h.code for h in HUBS]
         assert len(codes) == len(set(codes))
+
+
+class TestUnknownAirportsFailClosed:
+    """Silence must not read as approval. Safety-critical.
+
+    Audited 2026-08-23 against a list of real US and Canadian airports: 50
+    of them - Anchorage and Fairbanks among them - were not on the deny list
+    and came back clean, because `ban_reason` was a pure deny list and
+    returned None for anything nobody had thought to add. A Costa Rican
+    passport needs a C-1 for every one of them, and the traveller would
+    discover that at the SJO gate.
+    """
+
+    @pytest.mark.parametrize("code", [
+        "ANC", "FAI", "JNU", "KTN", "SIT", "BET", "OTZ", "OME", "ADQ",
+        "ABQ", "TUL", "BHM", "GEG", "ROC", "SYR", "TYS", "ALB", "HSV",
+        "ICT", "ISP", "LEX", "MHT", "MYR", "PNS", "PSP", "SBA", "SRQ",
+        "TLH", "TVC", "XNA"])
+    def test_the_us_airports_that_were_missing(self, code):
+        assert ban_reason(code), f"{code} is in the United States"
+
+    @pytest.mark.parametrize("code", [
+        "YQT", "YZF", "YXY", "YFB", "YQM", "YSJ", "YYT", "YDF", "YQX",
+        "YZV", "YBG", "YQY", "YAM", "YTS", "YXU", "YQG", "YXC", "YXS",
+        "YPR", "YZP"])
+    def test_the_canadian_airports_that_were_missing(self, code):
+        assert ban_reason(code), f"{code} is in Canada"
+
+    def test_a_code_nobody_has_researched_is_rejected(self):
+        reason = ban_reason("XQZ")
+        assert reason and "unverified" in reason
+
+    def test_the_rejection_says_what_to_do_about_it(self):
+        """A rejection nobody can action is a rejection nobody will fix."""
+        assert "HUBS" in ban_reason("XQZ")
+
+    def test_every_researched_hub_is_still_allowed(self):
+        for hub in HUBS:
+            assert ban_reason(hub.code) is None, hub.code
+
+    def test_the_route_endpoints_are_allowed(self):
+        """Rejecting SJO or Tokyo would reject literally every itinerary."""
+        for code in ("SJO", "NRT", "HND", "KIX", "ITM", "TYO", "OSA"):
+            assert ban_reason(code) is None, code
+
+    @pytest.mark.parametrize("code", [
+        "MEX", "MTY", "FRA", "CDG", "ZRH", "PVR", "PTY", "MAD", "IST",
+        "LIR", "KUL", "SAL", "AMS", "ICN", "DOH"])
+    def test_every_hub_ever_actually_observed_is_allowed(self, code):
+        """The 15 connecting airports that appear in the real history.
+
+        Four of them - MTY, PVR, LIR and SAL - were passing only because
+        nothing had banned them. LIR is Costa Rica's own second airport.
+        """
+        assert ban_reason(code) is None, code
+
+    def test_it_reaches_the_browser_path(self):
+        """Both visa call sites reject on any non-None reason."""
+        from tracker.browser import BrowserOption
+        from datetime import date
+        o = BrowserOption(price_usd=900, origin="SJO", destination="TYO",
+                          depart_date=date(2027, 1, 1),
+                          return_date=date(2027, 1, 28),
+                          stops=("ANC",), airlines=("X",), total_minutes=1000,
+                          deep_link="")
+        assert not o.visa_ok
+        assert "ANC" in o.banned_reason

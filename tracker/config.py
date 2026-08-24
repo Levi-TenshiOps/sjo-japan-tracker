@@ -174,7 +174,21 @@ class Config:
                     f"{code} is on the visa deny list and cannot be used"
                 )
         for out, back in self.date_pairs:
-            if back is not None and back <= out:
+            # Round-trip only, enforced here rather than trusted. A bare
+            # date in config.yaml parses to (depart, None), and
+            # `search.build_query` turns a None return into trip="one-way"
+            # without comment. A one-way fare is roughly half the price of
+            # the round trip it would be compared against, so it would not
+            # look like a bug in the email - it would look like the best
+            # deal ever found.
+            if back is None:
+                raise ConfigError(
+                    f"date_pairs entry {out} has no return date. This tracker "
+                    f"is round-trip only; a one-way fare would be listed "
+                    f"beside round trips at about half the price. Write it as "
+                    f"[{out}, <return date>]."
+                )
+            if back <= out:
                 raise ConfigError(f"return {back} is not after departure {out}")
         if self.max_stops < 0 or self.max_stops > 3:
             raise ConfigError("max_stops must be between 0 and 3")

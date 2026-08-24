@@ -58,6 +58,23 @@ HUBS: tuple[Hub, ...] = (
     Hub("LIS", "Lisbon", "Portugal", "FREE", "Schengen. Feeds other EU hubs."),
     Hub("FCO", "Rome", "Italy", "FREE", "Schengen."),
     Hub("BCN", "Barcelona", "Spain", "FREE", "Schengen."),
+    # Added 2026-08-23 when `ban_reason` stopped treating silence as
+    # approval. Same Schengen basis as the entries above; all of them carry
+    # or feed Europe-Japan services, and Helsinki in particular is one of
+    # the main Europe-Japan gateways, so leaving it out would have quietly
+    # cost real fares.
+    Hub("HEL", "Helsinki", "Finland", "FREE", "Schengen. Finnair HEL-NRT/HND/KIX."),
+    Hub("VIE", "Vienna", "Austria", "FREE", "Schengen. Austrian VIE-NRT/HND."),
+    Hub("CPH", "Copenhagen", "Denmark", "FREE", "Schengen. SAS feed."),
+    Hub("ARN", "Stockholm", "Sweden", "FREE", "Schengen. SAS feed."),
+    Hub("OSL", "Oslo", "Norway", "FREE", "Schengen. SAS feed."),
+    Hub("BRU", "Brussels", "Belgium", "FREE", "Schengen. Feeds LH/AF hubs."),
+    Hub("MXP", "Milan", "Italy", "FREE", "Schengen."),
+    Hub("WAW", "Warsaw", "Poland", "FREE", "Schengen. LOT WAW-NRT."),
+    Hub("PRG", "Prague", "Czechia", "FREE", "Schengen."),
+    Hub("ATH", "Athens", "Greece", "FREE", "Schengen."),
+    Hub("DUS", "Dusseldorf", "Germany", "FREE", "Schengen."),
+    Hub("GVA", "Geneva", "Switzerland", "FREE", "Schengen."),
     # --- Europe (non-Schengen) ----------------------------------------------
     Hub("IST", "Istanbul", "Turkiye", "FREE", "Visa-free 90d. TK IST-NRT/HND."),
     Hub("LHR", "London Heathrow", "United Kingdom", "LIGHT", "UK ETA: online, ~GBP 16, usually minutes."),
@@ -72,6 +89,15 @@ HUBS: tuple[Hub, ...] = (
     Hub("TPE", "Taipei", "Taiwan", "FREE", "Visa-exempt entry."),
     Hub("KUL", "Kuala Lumpur", "Malaysia", "FREE", "Visa-free."),
     Hub("BKK", "Bangkok", "Thailand", "FREE", "Visa-free/VOA."),
+    # --- Observed in live results but never listed here -------------------
+    # Found 2026-08-23 by tallying every connecting airport the tracker has
+    # actually seen: these four appeared 523 times between them and were
+    # accepted only because nothing had banned them, not because anything
+    # had cleared them.
+    Hub("MTY", "Monterrey", "Mexico", "FREE", "Mexico, as MEX. Aeromexico feed to MEX."),
+    Hub("PVR", "Puerto Vallarta", "Mexico", "FREE", "Mexico, as MEX."),
+    Hub("LIR", "Liberia", "Costa Rica", "FREE", "Domestic. The trip owner's own country."),
+    Hub("SAL", "San Salvador", "El Salvador", "FREE", "Visa-free. Avianca hub feeding MEX/BOG."),
 )
 
 HUBS_BY_CODE: dict[str, Hub] = {h.code: h for h in HUBS}
@@ -87,10 +113,14 @@ DSM DTW ELP EWR FLL GRR GSP HNL HOU IAD IAH IND JAX JFK LAS LAX LGA LGB LIT
 MCI MCO MDW MEM MIA MKE MSP MSY OAK OGG OKC OMA ONT ORD ORF PBI PDX PHL PHX
 PIT PVD RDU RIC RNO RSW SAN SAT SAV SDF SEA SFO SJC SJU SLC SMF SNA STL TPA
 TUS BQN STT STX GUM SPN PPG
+ANC ABQ TUL BHM GEG ROC SYR TYS ALB HSV ICT ISP LEX MHT MYR PNS PSP SBA SRQ
+TLH TVC XNA FAI JNU KTN SIT BET OTZ OME ADQ
 """.split())
 
 CANADA_AIRPORTS = frozenset("""
 YYZ YUL YVR YYC YOW YEG YHZ YWG YQB YXE YQR YYJ YLW YXX YHM YKF YTZ
+YQT YZF YXY YFB YQM YSJ YYT YDF YQX YZV YBG YQY YAM YTS YXU YQG YXC YXS YPR
+YZP
 """.split())
 
 # Mainland China: Costa Rica is not on the 240h visa-free-transit list, and
@@ -151,12 +181,43 @@ def is_metro(code: str) -> bool:
     return code.upper() in METRO_AIRPORTS
 
 
+# Every code this project has a researched opinion about: the hubs above,
+# the origin, Japan, and the metro codes Google may hand back.
+KNOWN_AIRPORTS: frozenset[str] = frozenset(
+    {h.code for h in HUBS}
+    | set(ORIGINS) | set(JAPAN_AIRPORTS) | set(JAPAN_DESTINATIONS)
+    | {a for members in METRO_AIRPORTS.values() for a in members}
+    | BANNED_AIRPORTS
+)
+
+
 def ban_reason(code: str) -> str | None:
-    """Why this airport is disallowed, or None if it is fine."""
+    """Why this airport is disallowed, or None if it is fine.
+
+    **Unknown means no, not yes.** This used to be a pure deny list, so any
+    airport nobody had thought to add came back clean. Audited 2026-08-23
+    against a list of real US and Canadian airports: 50 of them - including
+    Anchorage and Fairbanks - were not on it and would have been treated as
+    visa-free transits. A Costa Rican passport needs a C-1 for every one of
+    them, and the traveller would find that out at the SJO gate.
+
+    A hand-kept deny list can never be complete, so an unrecognised code is
+    now a rejection with a reason that says why, rather than silence that
+    reads as approval. The cost is a fare lost to an unlisted-but-legal hub;
+    the alternative is recommending a flight that cannot legally be taken.
+    That trade only goes one way.
+
+    Adding a hub is deliberate: give it a researched tier and a note in
+    HUBS, exactly as the eight-year-old comment at the top of this file
+    already asked for.
+    """
     code = code.upper()
     for group, reason in BAN_REASONS.items():
         if code in group:
             return reason
+    if code not in KNOWN_AIRPORTS:
+        return ("not a researched connection, so its transit-visa rules are "
+                "unverified - add it to HUBS if it is genuinely visa-free")
     return None
 
 
