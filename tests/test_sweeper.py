@@ -15,7 +15,7 @@ from tracker.browser import BrowserOption
 from tracker.schedule import Window
 from tracker import sweeper
 from tracker.sweeper import (
-    Discovery, SweepStore, sweep_batch,
+    Discovery, SweepStore, next_window, sweep_batch,
 )
 
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -754,14 +754,40 @@ class TestHotAndColdTiering:
         prices = [s.found[k]["price_usd"] for k in hot_keys(s, threshold=9999)]
         assert prices == sorted(prices)
 
-    def test_an_unpriced_window_is_always_taken(self):
-        """It might be the cheapest there is; skipping it would blind us."""
+    def test_an_unpriced_window_is_never_skipped(self):
+        """It might be the cheapest there is; skipping it would blind us.
+
+        Weakened deliberately on 2026-08-23 from "taken immediately" to
+        "never skipped". A hot or warm launch may now come first, but the
+        cold cursor does not advance on those, so the unpriced window is
+        still the next cold pick. Delayed by a launch or two; never lost.
+
+        The immediate version was what blocked the warm tier: it returned
+        early whenever the cold window was unpriced, which 37% into a first
+        pass is nearly every launch.
+        """
         from tracker.sweeper import next_window
         ws = windows(5)
         s = self._stocked(ws[:2])
         s.cursor = 4                     # points at an unpriced window
-        w, was_hot = next_window(ws, s)
-        assert w.key == ws[4].key and not was_hot
+        seen = set()
+        for _ in range(12):
+            w, special = next_window(ws, s)
+            seen.add(w.key)
+            if not special:
+                s.cursor += 1
+            s.windows_priced += 1
+        assert ws[4].key in seen, "the unpriced window must still be reached"
+
+    def test_the_cursor_does_not_advance_past_an_unpriced_window(self):
+        """What makes 'never skipped' true rather than hopeful."""
+        from tracker.sweeper import next_window
+        ws = windows(5)
+        s = self._stocked(ws[:2])
+        s.cursor = 4
+        w, special = next_window(ws, s)
+        if special:
+            assert s.cursor == 4, "a hot/warm pick must leave the cursor alone"
 
     def test_the_cold_rotation_still_advances(self, dom):
         """Only chasing cheap windows would never find a new bargain."""
@@ -1035,3 +1061,94 @@ class TestTheHotShareIsDerivedNotFixed:
         assert refreshed >= n_hot, (
             f"{n_hot} hot windows, 1-in-{every} launches: only {refreshed:.0f} "
             f"re-priced in {fresh}h - some would go stale")
+
+
+class TestTheWarmTier:
+    """Most of the search space cannot hold a cheap fare, and we know which.
+
+    Measured 2026-08-23 over 1,165 observations: every fare at or under
+    $1,600 departed Friday or Monday, and the Edelweiss/SWISS Zurich
+    routing that carries all of them appears only on Monday, Wednesday and
+    Friday departures - 371 Tuesday and Thursday windows priced, not one
+    Zurich routing among them. That is a flight schedule.
+
+    Only ~10% of windows carry a weekday pair that has ever produced a
+    cheap fare, and the sweep was spending 90% of its launches elsewhere.
+    """
+
+    def _store_with(self, price, depart, back):
+        s = SweepStore()
+        s.found[f"{depart}_{back}"] = {
+            "depart": depart, "ret": back, "price_usd": price,
+            "origin": "SJO", "destination": "TYO", "stops": ["ZRH"],
+            "airlines": ["SWISS"], "total_minutes": 2780, "deep_link": "",
+            "seen_at": datetime.now(timezone.utc).isoformat()}
+        return s
+
+    def test_a_cheap_fare_teaches_its_weekday_pair(self):
+        # 2027-01-29 is a Friday, 2027-02-25 a Thursday.
+        s = self._store_with(1347, "2027-01-29", "2027-02-25")
+        assert sweeper.promising_weekday_pairs(s, threshold=1400) == {(4, 3)}
+
+    def test_a_dear_fare_teaches_nothing(self):
+        s = self._store_with(3200, "2027-01-29", "2027-02-25")
+        assert sweeper.promising_weekday_pairs(s, threshold=1400) == set()
+
+    def test_a_fare_just_over_the_line_still_counts(self):
+        """WARM_PAIR_MULTIPLE: a $1,550 pair is worth watching at a $1,400
+        target, because the pair is the signal, not the exact price."""
+        s = self._store_with(1550, "2027-01-29", "2027-02-25")
+        assert sweeper.promising_weekday_pairs(s, threshold=1400) == {(4, 3)}
+
+    def test_no_threshold_means_no_warm_tier(self):
+        s = self._store_with(1347, "2027-01-29", "2027-02-25")
+        assert sweeper.promising_weekday_pairs(s, threshold=None) == set()
+
+    def test_it_is_derived_not_hardcoded(self):
+        """If the schedule moves to Tuesdays this must follow it.
+
+        A literal {Mon, Wed, Fri} would be the same circular reasoning that
+        produced the 'all cheap fares are in January' claim.
+        """
+        # 2027-01-26 is a Tuesday, 2027-02-23 a Tuesday.
+        s = self._store_with(1347, "2027-01-26", "2027-02-23")
+        assert sweeper.promising_weekday_pairs(s, threshold=1400) == {(1, 1)}
+
+    def test_a_corrupt_row_does_not_break_the_derivation(self):
+        s = self._store_with(1347, "2027-01-29", "2027-02-25")
+        s.found["junk"] = {"depart": "not-a-date", "ret": "x", "price_usd": 1}
+        assert sweeper.promising_weekday_pairs(s, threshold=1400) == {(4, 3)}
+
+    def test_launches_concentrate_on_the_plausible_windows(self):
+        """The whole point: 10% of the space, far more than 10% of the work."""
+        ws = windows(140)
+        s = self._store_with(1347, ws[0].depart.isoformat(),
+                             ws[0].back.isoformat())
+        pairs = sweeper.promising_weekday_pairs(s, threshold=1400)
+        warm = {w.key for w in ws
+                if (w.depart.weekday(), w.back.weekday()) in pairs}
+        assert 0 < len(warm) < len(ws)
+        hits = 0
+        for _ in range(400):
+            w, special = next_window(ws, s, threshold=1400, hot_share=0.11)
+            if w.key in warm:
+                hits += 1
+            if not special:
+                s.cursor += 1
+            s.windows_priced += 1
+        space = len(warm) / len(ws)
+        assert hits / 400 > space * 2, (
+            f"warm windows are {space:.0%} of the space but took only "
+            f"{hits/400:.0%} of the launches")
+
+    def test_the_cold_rotation_is_not_starved(self):
+        """Chasing only plausible dates would never find a new pattern."""
+        ws = windows(140)
+        s = self._store_with(1347, ws[0].depart.isoformat(),
+                             ws[0].back.isoformat())
+        for _ in range(400):
+            w, special = next_window(ws, s, threshold=1400, hot_share=0.11)
+            if not special:
+                s.cursor += 1
+            s.windows_priced += 1
+        assert s.cursor > 150, f"cold cursor barely moved: {s.cursor}"

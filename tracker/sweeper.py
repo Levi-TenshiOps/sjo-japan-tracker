@@ -160,6 +160,7 @@ class SweepStore:
     # here until they can be re-checked during a healthy stretch.
     suspect: list = field(default_factory=list)
     throttle_events: int = 0
+    warm_index: int = 0        # rotation over the schedule-plausible windows
     consecutive_rests: int = 0
     throttled_since: str = ""
     last_throttle: str = ""
@@ -368,8 +369,56 @@ def needed_hot_share(n_hot: int, *, cycle_s: float,
     return min(cap, (n_hot / freshness_hours) / launches_per_hour)
 
 
+# Measured 2026-08-23 over 1,165 observations. Every fare at or under
+# $1,600 departed on a Friday or a Monday, and the Edelweiss/SWISS routing
+# through Zurich - which carries every cheap fare found so far - appears on
+# Monday, Wednesday and Friday departures only:
+#
+#     Mon  41 of 228 priced (18.0%)      Tue  0 of 228      Thu  0 of 143
+#     Wed  46 of 201 priced (22.9%)      Sat  0 of  58      Sun  0 of  63
+#     Fri  67 of 244 priced (27.5%)
+#
+# That is a flight schedule, not noise: 371 Tuesday and Thursday windows
+# priced, not one Zurich routing among them. Only 220 of 2,745 windows - 8%
+# - carry a (departure, return) weekday pair that has ever produced a fare
+# at or under $1,600, and the sweep was spending 92% of its launches on
+# dates that structurally cannot hold one.
+#
+# So there is a third tier between hot and cold. It is derived from the
+# history rather than hardcoded, because a hardcoded weekday list would be
+# the circular-reasoning trap this project has already fallen into once:
+# the pairs come from what has been *observed*, and the cold tier keeps
+# every other date in rotation so a new pattern is still discovered.
+WARM_SHARE = 0.25          # keeps the ~220 plausible windows fresh daily
+WARM_PAIR_MULTIPLE = 1.15  # a pair qualifies on a fare within this of target
+
+
+def promising_weekday_pairs(store: "SweepStore", *, threshold: int | None,
+                            multiple: float = WARM_PAIR_MULTIPLE) -> set:
+    """(depart weekday, return weekday) pairs that have produced a cheap fare.
+
+    Derived, never hardcoded. If Edelweiss moves to Tuesdays this follows
+    within a pass; a literal {Mon, Wed, Fri} would not.
+    """
+    if threshold is None:
+        return set()
+    ceiling = threshold * multiple
+    pairs = set()
+    for v in store.found.values():
+        try:
+            if float(v.get("price_usd", 10 ** 9)) > ceiling:
+                continue
+            d = Date.fromisoformat(v["depart"])
+            b = Date.fromisoformat(v["ret"])
+        except (ValueError, TypeError, KeyError):
+            continue
+        pairs.add((d.weekday(), b.weekday()))
+    return pairs
+
+
 def next_window(windows: Sequence, store: "SweepStore", *,
-                threshold: int | None = None, hot_share: float = HOT_SHARE):
+                threshold: int | None = None, hot_share: float = HOT_SHARE,
+                warm_share: float = WARM_SHARE):
     """The next window to price: (window, was_hot).
 
     A window never priced counts as cold and is always taken when the cold
@@ -381,8 +430,8 @@ def next_window(windows: Sequence, store: "SweepStore", *,
     cold = windows[store.cursor % len(windows)]
 
     hot = [k for k in hot_keys(store, threshold=threshold)]
-    if not hot or cold.key not in store.found:
-        return cold, False          # nothing known yet, or this one is new
+    if not hot:
+        return cold, False          # nothing known yet
 
     # Deterministic interleave: every Nth launch is a hot one. Rotating
     # through the hot list rather than always taking the cheapest keeps the
@@ -398,6 +447,28 @@ def next_window(windows: Sequence, store: "SweepStore", *,
         picks = [by_key[k] for k in hot if k in by_key]
         if picks:
             return picks[(store.windows_priced // every) % len(picks)], True
+
+    # Warm: dates whose weekday pair has actually produced a cheap fare.
+    # Rotated on their own cursor so the whole plausible set stays fresh
+    # rather than one corner of it.
+    #
+    # This deliberately fires even when the cold window is one never priced
+    # before. The first version returned early on an unpriced cold window -
+    # the rule that guarantees coverage - and since the sweep is 37% into
+    # its first pass that was almost every launch, so the warm tier fired
+    # 12% of the time against a 10% share of the space: it did essentially
+    # nothing. Coverage is not weakened by interleaving, only slowed: an
+    # unpriced window is still always taken when the cold cursor reaches it.
+    if warm_share > 0:
+        warm_every = max(int(1 / warm_share), 2)
+        if store.windows_priced % warm_every == 1:
+            pairs = promising_weekday_pairs(store, threshold=threshold)
+            if pairs:
+                warm = [w for w in windows
+                        if (w.depart.weekday(), w.back.weekday()) in pairs]
+                if warm:
+                    store.warm_index = (store.warm_index + 1) % len(warm)
+                    return warm[store.warm_index], True
     return cold, False
 
 

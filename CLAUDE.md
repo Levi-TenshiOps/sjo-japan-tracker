@@ -370,6 +370,64 @@ one extra concurrent request, and the throttle detection catches the
 latter. Stale locks - dead PID, or no heartbeat for ten minutes - are
 broken rather than waited out.
 
+## The cheap fares run on a flight schedule, and we were ignoring it
+
+The single most useful thing measured so far. 1,165 observations,
+2026-08-23:
+
+    ZRH routing by DEPARTURE weekday      every fare <= $1,600 departed
+    Mon  41 of 228 priced (18.0%)         Fri -> Sun   27
+    Tue   0 of 228 priced ( 0.0%)         Fri -> Tue   20
+    Wed  46 of 201 priced (22.9%)         Mon -> Tue   11
+    Thu   0 of 143 priced ( 0.0%)         Fri -> Thu   10
+    Fri  67 of 244 priced (27.5%)
+    Sat   0 of  58    Sun  0 of  63
+
+Edelweiss flies SJO-ZRH on Monday, Wednesday and Friday. 371 Tuesday and
+Thursday windows priced and not one Zurich routing among them - that is a
+schedule, not sampling noise. Every cheap fare found in eight months rides
+that one routing.
+
+Consequence: **only ~10% of windows carry a (departure, return) weekday
+pair that has ever produced a fare at or under $1,600**, and the sweep was
+spending 90% of its launches on dates that structurally cannot hold one.
+
+`promising_weekday_pairs` derives those pairs from the store and
+`next_window` gives them a `WARM_SHARE` of launches. Measured over 3,000
+simulated launches: 34% now land on that 10% of the space, so a plausible
+window is re-priced every ~21 hours instead of every 3.4 days, while cold
+coverage keeps 66% and still walks everything.
+
+**Derived, never hardcoded.** A literal `{Mon, Wed, Fri}` would be the same
+circular reasoning as "all the cheap fares are in January": true of what
+had been looked at. If Edelweiss moves to Tuesdays, the pairs follow within
+a pass. The cold tier is what makes that possible, so do not raise
+WARM_SHARE to the point of starving it.
+
+One rule had to be weakened for this to work at all. `next_window` used to
+return early whenever the cold window had never been priced - the guarantee
+that an unpriced window is never skipped. 37% into a first pass that is
+nearly every launch, so the warm tier fired 12% of the time against a 10%
+share: it did nothing. The guarantee is now "never skipped" rather than
+"taken immediately": the cursor does not advance on a hot or warm pick, so
+an unpriced window is still the next cold one, delayed by a launch or two.
+
+## Boundary analysis: none of the other constraints are costing money
+
+Same 1,165 observations, looking at the 60 cheapest fares. If cheap fares
+piled up at a limit, cheaper ones would probably lie past it. They do not:
+
+    stops        49 of 60 use ONE stop, 11 use two, none need three
+    trip length  23n/25n/27n/29n/30n only - nothing at the 21n floor
+                 or the 38n ceiling
+    duration     46.3-47.0 h against a 60 h cap; nothing within 5 h of it
+
+So `max_stops: 2`, the 21-38 night range and `max_total_hours: 60` are all
+slack. Widening any of them would not find a cheaper fare. The trip lengths
+cluster at 23/25/27/29/30 for the same reason as everything else here: they
+are the lengths that land a Friday departure back on a day the return leg
+flies.
+
 ## The 15-round audit, 2026-08-23
 
 Run after the trip owner spotted that a 31 March departure could not come
