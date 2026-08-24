@@ -17,7 +17,8 @@ from datetime import date
 import pytest
 
 from tracker.browser import (
-    BrowserOption, chrome_path, claimed_result_count, fetch_dom, parse_options,
+    BrowserOption, chrome_path, claimed_result_count, dom_price_order,
+    fetch_dom, parse_options,
     unreadable_count, visa_free,
 )
 
@@ -185,3 +186,38 @@ class TestWeCanTellWhenAWindowWasUnderCollected:
         """The real captured DOM: every routing readable, nothing dropped
         for being unverifiable."""
         assert unreadable_count(options) == 0
+
+
+class TestGooglesOwnRowOrderDecidesWhetherTruncationMatters:
+    """Whether the unreachable rows are the dear ones is an ordering question.
+
+    `parse_options` sorts by price, which destroys the only evidence that
+    answers it. Read from the DOM instead - it is already in hand, so this
+    costs no requests against an IP that has only just recovered from a
+    throttle. The alternative, re-querying with `max_price` caps, does.
+
+    If Google's list is price-ascending, the rows behind the un-clickable
+    "View more flights" control are the most expensive and a shortfall
+    cannot cost a cheap fare. If it is "Best" order - a blend of price and
+    duration - a cheap slow fare could sit below the fold.
+    """
+
+    def test_the_captured_page_is_price_ascending(self):
+        html = io.open(FIXTURE, encoding="utf-8").read()
+        order = dom_price_order(html)
+        assert order == [1863, 1948, 2526, 2652, 6512]
+        assert order == sorted(order)
+
+    def test_it_reads_the_dom_order_not_the_sorted_output(self):
+        """The whole point: parse_options would have hidden this."""
+        html = io.open(FIXTURE, encoding="utf-8").read()
+        assert dom_price_order(html) == [
+            o.price_usd for o in parse_options(
+                html, origin="SJO", destination="NRT",
+                depart_date=DEPART, return_date=RETURN)], (
+            "on this page the two agree, which is exactly why a page where "
+            "they disagree is the interesting one to catch")
+
+    def test_empty_and_junk_are_empty_lists_not_crashes(self):
+        assert dom_price_order("") == []
+        assert dom_price_order("<html><body>nothing</body></html>") == []

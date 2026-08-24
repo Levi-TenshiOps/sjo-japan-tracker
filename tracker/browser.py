@@ -229,6 +229,7 @@ def _minutes(text: str) -> int:
 # returned"). Comparing it against what we parsed is the only way to notice
 # that a window was under-collected: measured 2026-08-23 a live page claimed
 # 16 while the parser found 13, and nothing anywhere said so.
+_PRICE_ONLY = re.compile(r"(\d[\d,]*) US dollars")
 _CLAIMED = re.compile(r"(\d{1,4})\s+results?\s+(?:returned|found)", re.I)
 
 
@@ -251,6 +252,33 @@ def claimed_result_count(html: str) -> int | None:
     except ValueError:
         return None
     return n if 0 < n < 1000 else None
+
+
+def dom_price_order(html: str) -> list[int]:
+    """Prices in Google's own row order, before we sort them.
+
+    `parse_options` sorts by price, which destroys the one piece of evidence
+    that says whether truncation can hide a bargain. If Google's list is
+    price-ascending then the rows behind the un-clickable "View more
+    flights" control are the dearest ones, and a shortfall provably cannot
+    cost us a cheap fare. If it is "Best" order - a blend of price and
+    duration - then a cheap slow fare could sit below the fold, and the
+    shortfall matters.
+
+    Reading it costs nothing: the DOM is already in hand. Answering the
+    question by re-querying with price caps would cost requests against an
+    IP that has only just recovered.
+    """
+    if not html:
+        return []
+    out: list[int] = []
+    for row in LexborHTMLParser(html).css("li.pIav2d"):
+        labels = " ".join(n.attributes.get("aria-label", "") or ""
+                          for n in row.css("[aria-label]"))
+        m = _PRICE_ONLY.search(labels)
+        if m:
+            out.append(int(m.group(1).replace(",", "")))
+    return out
 
 
 def unreadable_count(options) -> int:

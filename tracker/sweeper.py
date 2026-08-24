@@ -47,8 +47,8 @@ from typing import Callable, Iterable, Sequence
 from . import gate
 from . import history as history_mod
 from .browser import (
-    BrowserOption, chrome_path, claimed_result_count, fetch_dom,
-    parse_options, unreadable_count,
+    BrowserOption, chrome_path, claimed_result_count, dom_price_order,
+    fetch_dom, parse_options, unreadable_count,
 )
 from .verify import booking_link, within_duration
 
@@ -168,6 +168,12 @@ class SweepStore:
     # are ways a fare can be missed on a window we *did* check.
     shortfalls: int = 0
     unreadable: int = 0
+    # Of the shortfall windows, how many had Google's rows in
+    # ascending price order. If they always are, the rows behind the
+    # un-clickable control are the dearest and a shortfall is
+    # harmless; if not, a cheap slow fare can hide below the fold.
+    dom_sorted: int = 0
+    dom_unsorted: int = 0
     warm_index: int = 0        # rotation over the schedule-plausible windows
     # key -> {at, empty, healthy}. Every check, not just the finds.
     checked: dict = field(default_factory=dict)
@@ -299,6 +305,9 @@ class SweepStore:
                         f"more results than could be parsed")
         if self.unreadable:
             bits.append(f"{self.unreadable} option(s) dropped as unreadable")
+        if self.dom_sorted or self.dom_unsorted:
+            bits.append(f"row order ascending on {self.dom_sorted} of "
+                        f"{self.dom_sorted + self.dom_unsorted} shortfalls")
         return ", ".join(bits)
 
     def progress(self, total: int) -> str:
@@ -791,8 +800,19 @@ def sweep_batch(
         claimed = claimed_result_count(dom)
         if claimed is not None and claimed > len(parsed):
             store.shortfalls += 1
-            log.info("%s +%dn: Google claims %d results, parsed %d",
-                     depart, (ret - depart).days, claimed, len(parsed))
+            # Whether the rows we could not reach are the dear ones depends
+            # entirely on how Google orders its list. Record it from the DOM
+            # we already have, rather than spending requests to find out.
+            order = dom_price_order(dom)
+            if order:
+                if order == sorted(order):
+                    store.dom_sorted += 1
+                else:
+                    store.dom_unsorted += 1
+            log.info("%s +%dn: Google claims %d results, parsed %d "
+                     "(row order %s)",
+                     depart, (ret - depart).days, claimed, len(parsed),
+                     "ascending" if order == sorted(order) else "NOT ascending")
         blind = unreadable_count(parsed)
         if blind:
             store.unreadable += blind
