@@ -300,15 +300,44 @@ class SweepStore:
     def prune(self, *, max_entries: int = MAX_ENTRIES,
               drop_after_hours: float = DROP_AFTER_HOURS,
               now: datetime | None = None) -> int:
-        """Drop stale and surplus entries. Returns how many went."""
-        before = len(self.found)
+        """Drop stale and surplus entries. Returns how many went.
+
+        Dropping one must not lose the *fact that the window was checked*.
+        `found` keeps only the cheapest MAX_ENTRIES findings, so a window
+        priced at $2,132 falls out of it within a day - and it was then in
+        none of the four coverage states, because those read `found` and
+        the check ledger and nothing else. Measured against the live store
+        on 2026-08-24: 24 of 62 orphans were windows that had been priced
+        perfectly well and simply were not cheap.
+
+        Two costs, and the second is the larger. The audit stops meaning
+        what it says, and `unverified_windows` re-queues the window for
+        ever - spending Chrome launches re-pricing dates already known to
+        be dear, which is exactly the traffic the tiering exists to avoid.
+
+        So a dropped entry leaves a ledger stamp instead: it was checked,
+        it answered, and the fare itself is in `sweep_history.csv`
+        permanently. `secs` is omitted rather than invented - it exists to
+        re-calibrate the timing threshold from real measurements, and a
+        fabricated one would quietly corrupt that.
+        """
+        was = dict(self.found)
         alive = {k: v for k, v in self.found.items()
                  if _age_hours(v.get("seen_at", ""), now) <= drop_after_hours}
         if len(alive) > max_entries:
             ranked = sorted(alive.items(), key=lambda kv: kv[1].get("price_usd", 10 ** 9))
             alive = dict(ranked[:max_entries])
         self.found = alive
-        return before - len(self.found)
+        for key, rec in was.items():
+            if key in self.found:
+                continue
+            seen = str(rec.get("seen_at") or "")
+            prior = self.checked.get(key, {}).get("at", "")
+            # Do not overwrite a *newer* check with an older finding.
+            if not seen or seen >= str(prior):
+                self.checked[key] = {"at": seen or _now(),
+                                     "empty": False, "healthy": True}
+        return len(was) - len(self.found)
 
     def best(self, *, limit: int = 10, threshold: int | None = None,
              max_age_hours: float = STALE_AFTER_HOURS,

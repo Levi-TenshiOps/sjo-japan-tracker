@@ -962,6 +962,89 @@ The liveness signal, meanwhile, is the store's mtime, not the log. A
 window only logs a line when Google's claimed count exceeds what was
 parsed, so a healthy sweep is legitimately quiet for minutes at a time.
 
+## The coverage invariant had drifted, and pruning was why
+
+Re-audited against the live store on 2026-08-24, using the same `_audit`
+the suite asserts with. It reported **62 orphans** - windows walked, in
+none of the four states, silently written off. This file said 0, and it
+had been 0 when it was written.
+
+Two causes, and only one of them is a data gap.
+
+**24 were priced perfectly well and simply were not cheap.** `found` is a
+leaderboard, not a record of what was checked: `prune` keeps the cheapest
+`MAX_ENTRIES` and drops the rest, so a window priced at $2,132 falls out
+within a day. The audit reads `found` and the check ledger and knows
+nothing about `sweep_history.csv`, where that fare is recorded for ever.
+
+The second cost is the larger one and it is not bookkeeping:
+`unverified_windows` re-queues those windows *for ever*, so the re-check
+backlog fills with dates already known to be dear - exactly the traffic
+the tiering exists to avoid. `prune` now leaves a ledger stamp
+(`empty: False, healthy: True`) for anything it drops. `secs` is omitted
+rather than invented, because it exists to re-calibrate the timing
+threshold from real measurements and a fabricated value would corrupt it.
+
+**38 were checked before the ledger existed**, on 2026-08-23, and left no
+evidence either way. Those are the real "an empty answer is evidence of
+nothing" case. `--recheck-unverified` queued them; the audit now reports
+0 orphans against the live store.
+
+The lesson is the one this project keeps relearning in new costumes: **an
+invariant that is only asserted in tests will drift in production.** The
+suite built its store by sweeping a dozen windows, which never reaches
+`MAX_ENTRIES`, so no test ever pruned and then audited. `TestPruningDoes
+NotLoseTheAccounting` closes that seam.
+
+## What 1,602 priced options actually say
+
+Analysed 2026-08-24 from `sweep_history.csv` (Chrome, visa-free only).
+
+    prices     min $1,347   p10 $1,808   median $2,645   p90 $3,441
+    <= $1,150      0 of 1,602   (the standout threshold has never been hit)
+    <= $1,400     16 of 1,602   1.0%
+    <= $1,600     37 of 1,602   2.3%
+    <= $2,000    286 of 1,602  17.9%
+
+**Zurich is not just the cheapest hub, it is a different distribution.**
+
+    hub        n     min    median   <=$1,600
+    ZRH       73   1,347    1,711      27
+    FRA      417   1,479    2,141       4
+    LIR+ZRH   36   1,495    1,808       5
+    CDG      225   1,955    2,562       0
+    AMS       49   2,097    2,229       0
+
+FRA is priced six times as often as ZRH and produces a seventh as many
+sub-$1,600 fares. This supersedes the 16-window sample earlier in this
+file, where ZRH did not appear at all - with 73 observations it is now
+the best-evidenced routing in the project, and `LIR+ZRH` (via Costa
+Rica's own second airport) is a real second way onto the same aircraft.
+
+**The cheapest fare per departure month, and the hole in it:**
+
+    2026-10   n=359   $1,511   2026-10-26 -> 2026-11-17  LIR+ZRH
+    2026-11   n=302   $1,479   2026-11-08 -> 2026-12-08  FRA
+    2026-12   NEVER PRICED
+    2027-01   n=375   $1,347   2027-01-22 -> 2027-02-21  ZRH
+    2027-02   n=182   $1,439   2027-02-05 -> 2027-03-02  ZRH
+    2027-03   n=384   $1,963   2027-03-14 -> 2027-04-13  FRA
+
+**December 2026 has never been priced by the sweep at all.** It sits at
+positions 2,187-2,744 in `sweep_order` - dead last, because the priority
+months lead - and the cursor is at 1,815. November is 31% done.
+
+That matters more than it looks, and it is the exact trap this file warns
+about twice already: the wide net's Chrome-confirmed December hint was
+**$1,432**, the second-cheapest fare found anywhere, and the sweep has
+never looked at a single December departure. Do not read "January and
+February are cheapest" out of the table above. It is a statement about
+where the cursor has been.
+
+The March figure is the same trap in miniature: `2027-03-14 -> 2027-04-13`
+returns in April, so it is a pre-`whole_trip_in_searched_months`
+observation. The current window list contains 0 such windows - checked.
+
 ## Layout
 
 ```

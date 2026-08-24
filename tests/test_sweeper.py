@@ -1968,3 +1968,76 @@ class TestTheTruncationGapWasNeverAGap:
         s = SweepStore(shortfalls=3, rows_deduped=4,
                        rows_missed_by_parser=7)
         assert "7 unreadable" in s.health()
+
+
+class TestPruningDoesNotLoseTheAccounting:
+    """`found` is a leaderboard, not a record of what was checked.
+
+    It keeps only the cheapest MAX_ENTRIES findings, so a window priced at
+    $2,132 falls out of it within a day. Before 2026-08-24 that window was
+    then in none of the four coverage states: the audit reads `found` and
+    the check ledger, and knows nothing about `sweep_history.csv`.
+
+    Measured against the live store that day: 62 orphans, 24 of them
+    windows that had been priced perfectly well and simply were not cheap.
+    """
+
+    def _store_with(self, n, price_of):
+        s = sweeper.SweepStore()
+        for i in range(n):
+            key = f"2027-01-{i % 28 + 1:02d}_2027-02-{i % 28 + 1:02d}"
+            s.found[key] = {
+                "depart": f"2027-01-{i % 28 + 1:02d}",
+                "ret": f"2027-02-{i % 28 + 1:02d}",
+                "price_usd": price_of(i), "origin": "SJO",
+                "destination": "TYO", "stops": [], "airlines": "",
+                "total_minutes": 2780, "deep_link": "",
+                "seen_at": "2026-08-24T12:00:00+00:00",
+            }
+        return s
+
+    def test_a_surplus_drop_leaves_a_healthy_stamp(self):
+        s = self._store_with(10, lambda i: 1000 + i * 100)
+        s.prune(max_entries=3)
+        assert len(s.found) == 3
+        dropped = [k for k in s.checked]
+        assert len(dropped) == 7, s.checked
+        for k in dropped:
+            assert s.checked[k]["healthy"] is True
+            assert s.checked[k]["empty"] is False
+
+    def test_the_stamp_keeps_the_window_out_of_the_recheck_queue(self):
+        """The expensive half of the bug: re-pricing known-dear dates."""
+        s = self._store_with(10, lambda i: 1000 + i * 100)
+        ws = [Window(date(2027, 1, i % 28 + 1), date(2027, 2, i % 28 + 1))
+              for i in range(10)]
+        s.cursor = len(ws)
+        s.prune(max_entries=3)
+        assert sweeper.unverified_windows(ws, s) == []
+
+    def test_secs_is_omitted_rather_than_invented(self):
+        """It exists to re-calibrate the timing threshold from real data."""
+        s = self._store_with(5, lambda i: 1000 + i * 100)
+        s.prune(max_entries=1)
+        assert all("secs" not in v for v in s.checked.values())
+
+    def test_a_newer_real_check_is_not_overwritten(self):
+        s = self._store_with(2, lambda i: 1000 + i * 100)
+        key = sorted(s.found)[-1]
+        s.checked[key] = {"at": "2026-08-25T00:00:00+00:00",
+                          "empty": True, "healthy": False, "secs": 2.0}
+        s.prune(max_entries=1)
+        assert s.checked[key]["healthy"] is False, "an older finding clobbered a newer check"
+
+    def test_a_stale_drop_is_stamped_too(self):
+        s = self._store_with(2, lambda i: 1000 + i * 100)
+        for v in s.found.values():
+            v["seen_at"] = "2026-08-01T00:00:00+00:00"
+        s.prune(drop_after_hours=1.0)
+        assert s.found == {}
+        assert len(s.checked) == 2
+
+    def test_pruning_nothing_stamps_nothing(self):
+        s = self._store_with(3, lambda i: 1000 + i * 100)
+        assert s.prune(max_entries=10) == 0
+        assert s.checked == {}
