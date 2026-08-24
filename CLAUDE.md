@@ -1380,8 +1380,20 @@ full pass takes ~21 h, so a finding can be that old), that anything outside
 every carrier. Only the cheapest visa-free option per window is kept, by
 design - the baseline gets the rest through `sweep_history.csv`.
 
-**Coverage is the honest limit.** Chrome prices `chrome_max_per_run` (20)
-windows a run, 120 a day, against a search space of ~4,000. Everything else
+**Coverage is the honest limit.** Chrome is *budgeted* at
+`chrome_max_per_run` (20) windows a run, but it does not spend it: measured
+across eight runs on 2026-08-23/24 it launched **8-13 times a run, so ~50-78
+a day**, not 120. `choose_targets` can only offer it wide-net hints (0-3),
+the hot list, and whatever the grid returned - and `hot_list_size` is 8, so
+the candidate pool is capped well below the budget it is drawing on.
+
+Two knobs that should agree and do not. Raising `hot_list_size` to ~18 would
+fill the budget and roughly double the windows verified fresh each run,
+which is the only channel that sees the cheap European routings. It also
+raises traffic on the address, and `hot_keys` feeds the HTTP grid's hot
+windows too, so it is a deliberate decision rather than a tidy-up - and not
+one to take while the health line is above ~20%. Left as-is for now, but do
+not repeat the "120 a day" figure. Everything else
 is priced by HTTP, whose numbers run hundreds of dollars high. So the email
 leads with the Chrome block and labels the HTTP table an upper bound. Do
 not quote an HTTP price as "the cheapest" anywhere.
