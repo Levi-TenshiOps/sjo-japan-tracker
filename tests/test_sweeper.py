@@ -1891,3 +1891,43 @@ class TestAThrottleIsFastAndABarrenDateIsNot:
                     sleep=lambda _: None, delay_s=0)
         assert all("secs" in v for v in s.checked.values())
         assert all(v["secs"] > 0 for v in s.checked.values())
+
+
+class TestTheHealthSampleMigration:
+    """`recent` changed meaning, so values from before it must not judge.
+
+    It counted every empty window and now counts only fast empties. Old
+    values read as a throttle: on 2026-08-24 the store came back at 81%
+    while the fresh samples beside it said 0% blank and pages were taking
+    12.5 seconds. `recent_blank` arrived in the same change, so its absence
+    beside a populated `recent` is the fingerprint of the old format.
+    """
+
+    def test_old_format_samples_are_discarded(self, tmp_path):
+        p = tmp_path / "s.json"
+        SweepStore(recent=[1] * 20, throttled_since="2026-08-24T17:00:00+00:00",
+                   consecutive_rests=2).save(p)
+        got = SweepStore.load(p)
+        assert got.recent == []
+        assert got.throttled_since == ""
+        assert got.consecutive_rests == 0
+
+    def test_new_format_samples_are_kept(self, tmp_path):
+        p = tmp_path / "s.json"
+        SweepStore(recent=[0] * 20, recent_blank=[1] * 20).save(p)
+        got = SweepStore.load(p)
+        assert len(got.recent) == 20 and len(got.recent_blank) == 20
+
+    def test_an_empty_store_is_untouched(self, tmp_path):
+        p = tmp_path / "s.json"
+        SweepStore().save(p)
+        assert SweepStore.load(p).recent == []
+
+    def test_findings_are_never_discarded_by_the_migration(self, tmp_path):
+        """Only the judgement is stale; the fares are still true."""
+        p = tmp_path / "s.json"
+        s = SweepStore(recent=[1] * 20)
+        s.found["k"] = {"depart": "2027-01-29", "ret": "2027-02-25",
+                        "price_usd": 1347, "seen_at": "2026-08-24T00:00:00+00:00"}
+        s.save(p)
+        assert SweepStore.load(p).found, "the migration threw away a fare"

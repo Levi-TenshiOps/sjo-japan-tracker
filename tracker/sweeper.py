@@ -212,7 +212,26 @@ class SweepStore:
         if not isinstance(data, dict) or data.get("version") != STORE_VERSION:
             return cls()
         known = {f for f in cls.__dataclass_fields__}
-        return cls(**{k: v for k, v in data.items() if k in known})
+        store = cls(**{k: v for k, v in data.items() if k in known})
+
+        # `recent` changed meaning on 2026-08-24: it used to count every
+        # empty window and now counts only *fast* empties, which is a
+        # different quantity entirely. Values written under the old meaning
+        # read as a throttle - the store came back at 81% while the fresh
+        # samples beside it said 0% blank and pages were taking 12.5s.
+        #
+        # `recent_blank` arrived in the same change, so its absence beside a
+        # populated `recent` is exactly the fingerprint of the old format.
+        # Drop the stale judgement rather than let it alarm; the next twenty
+        # windows rebuild it in half an hour.
+        if store.recent and not store.recent_blank:
+            log.info("Discarding %d connection-health sample(s) written "
+                     "before the meaning changed; judging fresh.",
+                     len(store.recent))
+            store.recent.clear()
+            store.throttled_since = ""
+            store.consecutive_rests = 0
+        return store
 
     def save(self, path: str | Path = DEFAULT_STORE) -> None:
         """Atomic write - the scheduled run may read this at any moment."""
