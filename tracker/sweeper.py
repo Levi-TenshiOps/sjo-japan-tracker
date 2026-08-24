@@ -856,10 +856,17 @@ def sweep_batch(
                     store.dom_sorted += 1
                 else:
                     store.dom_unsorted += 1
-            log.info("%s +%dn: Google claims %d results, parsed %d "
-                     "(row order %s)",
-                     depart, (ret - depart).days, claimed, len(parsed),
-                     "ascending" if order == sorted(order) else "NOT ascending")
+            # Say "unknown" rather than "ascending" when the order could
+            # not be read: [] == sorted([]) is True, so an unreadable page
+            # would otherwise report the reassuring answer.
+            if not order:
+                verdict = "row order unknown"
+            elif order == sorted(order):
+                verdict = "row order ascending"
+            else:
+                verdict = "row order NOT ascending"
+            log.info("%s +%dn: Google claims %d results, parsed %d (%s)",
+                     depart, (ret - depart).days, claimed, len(parsed), verdict)
         blind = unreadable_count(parsed)
         if blind:
             store.unreadable += blind

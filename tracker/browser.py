@@ -271,8 +271,15 @@ def dom_price_order(html: str) -> list[int]:
     """
     if not html:
         return []
+    # The same selector chain `parse_options` uses. A single selector would
+    # return [] whenever Google restyles, while the parser carried on via
+    # its fallbacks - and an empty list looks exactly like a page whose rows
+    # were in ascending order. Reassuring evidence manufactured out of a
+    # parsing failure is the one thing a detector must never produce.
+    tree = LexborHTMLParser(html)
+    rows = tree.css("li.pIav2d") or tree.css("ul.Rk10dc li") or tree.css("li")
     out: list[int] = []
-    for row in LexborHTMLParser(html).css("li.pIav2d"):
+    for row in rows:
         labels = " ".join(n.attributes.get("aria-label", "") or ""
                           for n in row.css("[aria-label]"))
         m = _PRICE_ONLY.search(labels)

@@ -221,3 +221,50 @@ class TestGooglesOwnRowOrderDecidesWhetherTruncationMatters:
     def test_empty_and_junk_are_empty_lists_not_crashes(self):
         assert dom_price_order("") == []
         assert dom_price_order("<html><body>nothing</body></html>") == []
+
+
+class TestTheDetectorCannotManufactureGoodNews:
+    """A detector that reports "fine" when it is blind is worse than none.
+
+    Found reviewing my own code an hour after writing it, 2026-08-24.
+    `dom_price_order` used a single selector where `parse_options` has a
+    fallback chain, so a Google restyle would return [] while the parser
+    carried on - and `[] == sorted([])` is True, so the log would have said
+    "row order ascending" for a page it could not read at all. That is the
+    reassuring answer, invented out of a parsing failure, about the one
+    question the instrumentation exists to answer.
+    """
+
+    FALLBACK = ('<html><body><ul class="Rk10dc"><li>'
+                '<div aria-label="From 1500 US dollars round trip total. 1 stop">a</div>'
+                '</li><li>'
+                '<div aria-label="From 1200 US dollars round trip total. 1 stop">b</div>'
+                '</li></ul></body></html>')
+
+    def test_it_follows_the_same_fallbacks_as_the_parser(self):
+        assert dom_price_order(self.FALLBACK) == [1500, 1200]
+
+    def test_it_agrees_with_the_parser_on_the_real_page(self):
+        """On synthetic markup they legitimately differ - `parse_options`
+        needs a price *and* an airline to build an option, this needs only a
+        price. On a real page every row has both, so they must agree."""
+        html = io.open(FIXTURE, encoding="utf-8").read()
+        parsed = parse_options(html, origin="SJO", destination="NRT",
+                               depart_date=DEPART, return_date=RETURN)
+        assert len(dom_price_order(html)) == len(parsed)
+
+    def test_reading_more_rows_than_the_parser_is_safe(self):
+        """It answers a question about Google's ordering, not about which
+        options are usable, so a row the parser rejected still counts."""
+        assert len(dom_price_order(self.FALLBACK)) == 2
+
+    def test_a_page_it_cannot_read_is_empty_not_ascending(self):
+        order = dom_price_order("<html><body>nothing here</body></html>")
+        assert order == []
+        assert order == sorted(order), (
+            "this is the trap: an empty list IS sorted, so the caller must "
+            "check for emptiness before calling it ascending")
+
+    def test_the_real_page_still_reads(self):
+        html = io.open(FIXTURE, encoding="utf-8").read()
+        assert len(dom_price_order(html)) == 5

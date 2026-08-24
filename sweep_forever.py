@@ -118,6 +118,21 @@ def main() -> int:
     windows = sweep_order(generate_windows(prefs, today=Date.today()))
     store = SweepStore.load(args.store)
 
+    # Prune on the way in, not only at batch boundaries. `prune` runs after
+    # `sweep_batch` returns, so a run stopped mid-batch never prunes at all -
+    # and on 2026-08-24, after a day of restarting to pick up fixes, the
+    # store held 459 findings against a MAX_ENTRIES of 400. Harmless in
+    # itself, but the cap exists to bound the file and it was not binding.
+    if not args.status:
+        dropped = store.prune()
+        if dropped:
+            # Persist it. Pruning in memory only would be lost the moment
+            # the process is stopped before its first batch completes, which
+            # is exactly the situation that let the store drift to 459.
+            store.save(args.store)
+            log.info("Pruned %d finding(s) on startup; %d remembered.",
+                     dropped, len(store.found))
+
     # A restart after a gap judges the connection fresh. Without this a
     # sweep stopped while throttled comes straight back up in 4x backoff on
     # yesterday's evidence, and needs two hours of crawling to disprove it.

@@ -138,3 +138,40 @@ def test_a_config_that_searches_nothing_is_refused(tmp_path):
     assert "No travel windows" in done.stderr, done.stderr
     assert not (tmp_path / "store.json").exists(), (
         "it must not have started writing a store")
+
+
+def test_the_store_is_pruned_on_startup(tmp_path):
+    """`prune` runs after a batch completes, so a run stopped mid-batch
+    never prunes. After a day of restarting to pick up fixes on 2026-08-24
+    the live store held 459 findings against a MAX_ENTRIES of 400 - the cap
+    was not binding because nothing was enforcing it at startup.
+    """
+    import json
+    from tracker.sweeper import MAX_ENTRIES, SweepStore
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    s = SweepStore()
+    for i in range(MAX_ENTRIES + 120):
+        key = f"2027-01-01_2027-02-{i:04d}"
+        s.found[key] = {"depart": "2027-01-01", "ret": "2027-02-01",
+                        "price_usd": 1000 + i, "origin": "SJO",
+                        "destination": "TYO", "stops": [], "airlines": [],
+                        "total_minutes": 100, "deep_link": "", "seen_at": now}
+    store_path = tmp_path / "discoveries.json"
+    s.save(store_path)
+    assert len(SweepStore.load(store_path).found) > MAX_ENTRIES
+
+    prefs = json.loads((ROOT / "preferences.example.json").read_text(
+        encoding="utf-8"))
+    prefs_path = tmp_path / "prefs.json"
+    prefs_path.write_text(json.dumps(prefs), encoding="utf-8")
+
+    done = subprocess.run(
+        [sys.executable, str(ROOT / "sweep_forever.py"), "--coverage",
+         "--preferences", str(prefs_path), "--store", str(store_path),
+         "--log", ""],
+        capture_output=True, text=True, timeout=90, cwd=str(ROOT))
+    assert done.returncode == 0, done.stderr
+    assert len(SweepStore.load(store_path).found) <= MAX_ENTRIES, (
+        "the store was not pruned on startup")
