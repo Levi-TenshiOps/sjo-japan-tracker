@@ -707,7 +707,8 @@ def sweep_batch(
         try:
             # Per window, not per run. Holding it for a whole pass would
             # make the scheduled runs queue behind fourteen hours of sweep.
-            with gate.google("sweep", path=lock_path, timeout=lock_timeout):
+            with gate.google("sweep", path=lock_path, timeout=lock_timeout,
+                             on_timeout="wait"):
                 dom = grab(url)
         except Exception as exc:            # noqa: BLE001 - never die mid-sweep
             log.debug("sweep fetch failed for %s: %s", depart, exc)

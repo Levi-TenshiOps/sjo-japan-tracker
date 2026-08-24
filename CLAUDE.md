@@ -364,11 +364,34 @@ The granularity matters. The sweep takes and releases per *window*, so it
 never holds the lock more than ~20 seconds and a scheduled run waits one
 window rather than queuing behind a fourteen-hour pass.
 
-On timeout the waiter proceeds anyway rather than raising. A scheduled run
-that skips its email because a lock file was untidy is a worse outcome than
-one extra concurrent request, and the throttle detection catches the
-latter. Stale locks - dead PID, or no heartbeat for ten minutes - are
-broken rather than waited out.
+On timeout the behaviour now depends on who is waiting, via `on_timeout`.
+
+A **scheduled run** proceeds anyway. It has an email waiting, and skipping
+that because a lock file was untidy is a worse outcome than one extra
+concurrent request.
+
+The **sweep waits**, and that is a fix rather than a preference. It used to
+proceed too, and on 2026-08-24 it did:
+
+    06:44:34  run:chrome takes the lock for its whole Chrome phase
+    06:47:17  sweep waited its 300s and queried Google alongside it
+    06:48:47  run:chrome finally finishes - over four minutes
+
+The sweep has no deadline. Proceeding bought it one window and spent the
+one thing this module exists to protect, on the exact concurrency measured
+at taking the hit rate from 87% to 24%. Worse, that failure is silent: the
+windows it priced in those seconds could have been recorded as empty when
+they were not.
+
+Waiting cannot deadlock - stale locks (dead PID, or no heartbeat for ten
+minutes) are still broken rather than waited out, whatever `on_timeout`
+says.
+
+The other half of that incident is not worth fixing. `cli.py` holds the
+lock for its entire Chrome phase rather than per launch, so the sweep waits
+about four minutes, six times a day - roughly 18 windows out of ~900. Taking
+and releasing per launch would recover that and add a lot of lock churn for
+a rounding error.
 
 ## An empty answer is evidence of nothing unless you record the weather
 

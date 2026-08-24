@@ -113,13 +113,29 @@ def _claim(path: Path, owner: str) -> bool:
 @contextlib.contextmanager
 def google(owner: str, *, path: str | Path = DEFAULT_LOCK,
            timeout: float = 300.0, poll: float = 1.0,
-           stale_after: float = STALE_AFTER_SECONDS):
+           stale_after: float = STALE_AFTER_SECONDS,
+           on_timeout: str = "proceed"):
     """Hold the right to query Google for the duration of the block.
 
-    Waits up to `timeout` for the current holder. On timeout it proceeds
-    anyway rather than raising: a scheduled run that skips its email because
-    a lock file was untidy is a worse outcome than one extra concurrent
-    request, and the throttle detection catches the latter.
+    Waits up to `timeout` for the current holder, then does what
+    `on_timeout` says:
+
+    * ``"proceed"`` - go ahead anyway. Right for a *scheduled run*: it has
+      an email waiting, and skipping it because a lock file was untidy is a
+      worse outcome than one extra concurrent request.
+    * ``"wait"`` - keep waiting. Right for the *sweep*, which has no
+      deadline at all. Proceeding buys it one window and costs the thing the
+      lock exists to protect.
+
+    The default was "proceed" for everyone, and on 2026-08-24 the sweep took
+    it: the 06:42 run held the lock for its whole Chrome phase, four minutes
+    and change, the sweep waited its 300 seconds and then queried Google
+    alongside it. That is precisely the concurrency this module exists to
+    prevent - measured 2026-08-23, it took the hit rate from 87% to 24%.
+
+    Waiting cannot deadlock. A holder that dies, or stops heartbeating for
+    `stale_after`, has its lock broken by the loop below regardless of this
+    setting.
     """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -139,6 +155,15 @@ def google(owner: str, *, path: str | Path = DEFAULT_LOCK,
             continue
         if time.monotonic() >= deadline:
             info = _read(p) or {}
+            if on_timeout == "wait":
+                log.info("Still waiting for the Google lock (held by %s). "
+                         "Waiting is correct here: this caller has no "
+                         "deadline, and querying alongside the holder is "
+                         "what the lock exists to prevent.",
+                         info.get("owner", "?"))
+                deadline = time.monotonic() + timeout
+                time.sleep(poll)
+                continue
             log.warning("Waited %.0fs for the Google lock (held by %s); "
                         "proceeding anyway", timeout, info.get("owner", "?"))
             break

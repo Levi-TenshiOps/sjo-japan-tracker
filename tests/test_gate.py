@@ -199,3 +199,70 @@ class TestAStaleLockCostsNoWait:
         with google("run", path=lock):
             pass
         assert time.monotonic() - start < 5.0
+
+
+class TestTheSweepWaitsRatherThanBargingIn:
+    """Proceeding on timeout is right for a run, wrong for the sweep.
+
+    Found in the live log 2026-08-24:
+
+        06:47:17 WARNING Waited 300s for the Google lock
+                 (held by run:chrome); proceeding anyway
+
+    The 06:42 scheduled run held the lock for its whole Chrome phase -
+    06:44:34 to 06:48:47, over four minutes - and the sweep, whose timeout
+    is 300s, gave up and queried Google alongside it. That is exactly the
+    concurrency this module exists to prevent: measured 2026-08-23 it took
+    the hit rate from 87% to 24%, and the failure is silent, so every window
+    the sweep priced in that window may have been recorded as empty when it
+    was not.
+
+    A scheduled run has an email waiting and should barge in. The sweep runs
+    forever and has no deadline; losing one window costs nothing, and taking
+    it costs the thing the lock protects.
+    """
+
+    def test_a_run_still_proceeds_on_timeout(self, lock):
+        """Unchanged: the email must not be skipped over a lock file."""
+        with google("sweep", path=lock):
+            with google("run", path=lock, timeout=0.05, poll=0.01) as hb:
+                assert hb.path is None, "it proceeded without the lock"
+
+    def test_the_sweep_keeps_waiting_instead(self, lock):
+        import threading
+        released = threading.Event()
+        got = {}
+
+        def waiter():
+            with google("sweep", path=lock, timeout=0.05, poll=0.01,
+                        on_timeout="wait") as hb:
+                got["held"] = hb.path is not None
+                got["after_release"] = released.is_set()
+
+        with google("run:chrome", path=lock):
+            t = threading.Thread(target=waiter, daemon=True)
+            t.start()
+            time.sleep(0.4)          # far longer than its 0.05s timeout
+            assert not got, "the sweep proceeded instead of waiting"
+            released.set()
+        t.join(timeout=5)
+        assert got.get("held") is True, "it should end up actually holding it"
+        assert got.get("after_release") is True
+
+    def test_waiting_still_breaks_a_dead_holder(self, lock):
+        """Waiting must not become a deadlock."""
+        lock.write_text(json.dumps(
+            {"pid": 999_999, "owner": "ghost", "beat": time.time()}),
+            encoding="utf-8")
+        start = time.monotonic()
+        with google("sweep", path=lock, timeout=0.05, poll=0.01,
+                    on_timeout="wait") as hb:
+            assert hb.path is not None
+        assert time.monotonic() - start < 5.0
+
+    def test_the_sweeper_asks_for_waiting(self):
+        """The setting is only useful if the sweep actually passes it."""
+        import inspect
+        from tracker import sweeper
+        src = inspect.getsource(sweeper.sweep_batch)
+        assert 'on_timeout="wait"' in src
