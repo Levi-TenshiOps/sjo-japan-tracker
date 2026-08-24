@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 from dataclasses import dataclass
 from datetime import date as Date
 from datetime import datetime, timezone
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from .itinerary import Itinerary
+
+log = logging.getLogger(__name__)
 
 FIELDS = [
     "checked_at_utc",
@@ -156,6 +159,42 @@ def _field(rec: dict, name: str) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _rows(p: Path):
+    """Yield the rows of a CSV that something else may be writing right now.
+
+    `sweep_history.csv` is appended to by the sweeper roughly every ninety
+    seconds, for ever, while the six scheduled runs read it. A read can
+    therefore land mid-append, and on Windows the tail of a file extended
+    but not yet flushed reads back as NUL bytes - which `csv` reports as
+    `_csv.Error: line contains NUL`, not as anything resembling "try again".
+
+    That killed the 09:03 run on 2026-08-24: exit code 1, no traceback, the
+    log simply stopping after the grid phase. It is the same lesson as the
+    malformed row that killed every run for four hours the day before -
+    **never crash on a file you only read** - but one level up, because
+    that fix guarded the fields and this one has to guard the iteration.
+
+    Stopping at the torn row is right rather than merely safe: every row
+    already read is valid and complete, and the missing tail is a handful
+    of the newest observations, which the next run picks up anyway.
+    """
+    try:
+        with p.open(newline="", encoding="utf-8", errors="replace") as fh:
+            reader = csv.DictReader(fh)
+            while True:
+                try:
+                    yield next(reader)
+                except StopIteration:
+                    return
+                except csv.Error as exc:
+                    log.debug("%s is being written (%s); using the %s",
+                              p.name, exc, "rows read so far")
+                    return
+    except OSError as exc:
+        log.warning("could not read %s (%s); continuing without it",
+                    p.name, exc)
+
+
 def read_prices(
     path: str | Path,
     *,
@@ -177,27 +216,26 @@ def read_prices(
     if not p.exists():
         return []
     prices: list[float] = []
-    with p.open(newline="", encoding="utf-8") as fh:
-        for rec in csv.DictReader(fh):
-            if origin and _field(rec, "origin").upper() != origin.upper():
-                continue
-            if destination and _field(rec, "destination").upper() != destination.upper():
-                continue
-            if band_source and _field(rec, "band_source") != band_source:
-                continue
-            if since:
-                stamp = _field(rec, "checked_at_utc")[:10]
-                try:
-                    if datetime.strptime(stamp, "%Y-%m-%d").date() < since:
-                        continue
-                except ValueError:
-                    continue
+    for rec in _rows(p):
+        if origin and _field(rec, "origin").upper() != origin.upper():
+            continue
+        if destination and _field(rec, "destination").upper() != destination.upper():
+            continue
+        if band_source and _field(rec, "band_source") != band_source:
+            continue
+        if since:
+            stamp = _field(rec, "checked_at_utc")[:10]
             try:
-                value = float(rec.get("price_usd") or 0)
-            except (TypeError, ValueError):
+                if datetime.strptime(stamp, "%Y-%m-%d").date() < since:
+                    continue
+            except ValueError:
                 continue
-            if value > 0:
-                prices.append(value)
+        try:
+            value = float(rec.get("price_usd") or 0)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            prices.append(value)
     return prices
 
 
@@ -207,11 +245,10 @@ def distinct_days(path: str | Path, *, origin: str | None = None) -> int:
     if not p.exists():
         return 0
     days: set[str] = set()
-    with p.open(newline="", encoding="utf-8") as fh:
-        for rec in csv.DictReader(fh):
-            if origin and _field(rec, "origin").upper() != origin.upper():
-                continue
-            stamp = _field(rec, "checked_at_utc")[:10]
-            if len(stamp) == 10:
-                days.add(stamp)
+    for rec in _rows(p):
+        if origin and _field(rec, "origin").upper() != origin.upper():
+            continue
+        stamp = _field(rec, "checked_at_utc")[:10]
+        if len(stamp) == 10:
+            days.add(stamp)
     return len(days)

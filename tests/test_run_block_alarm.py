@@ -108,3 +108,39 @@ class TestTheEmailsSayWhatHappened:
         c = run_recovered_email(when="15:45", cheapest="$1,347")
         assert "$1,347" in c.text
         assert "15:45" in c.text
+
+
+class TestACrashLeavesATrace:
+    """The scheduled task discards stderr, so the log is the only witness.
+
+    The 09:03 run on 2026-08-24 crashed reading a CSV the sweeper was
+    writing. All it left was exit code 1 and a log that stopped
+    mid-sentence, which is indistinguishable from the machine sleeping.
+    """
+
+    def test_the_traceback_reaches_the_log(self, monkeypatch, caplog):
+        import logging
+        import pytest as _pytest
+        from tracker import cli
+
+        def boom(*a, **k):
+            raise RuntimeError("csv went bang")
+
+        monkeypatch.setattr(cli, "run", boom)
+        with caplog.at_level(logging.ERROR, logger=cli.log.name):
+            with _pytest.raises(RuntimeError):
+                cli.main()
+        assert "did not finish" in caplog.text
+        assert "csv went bang" in caplog.text
+
+    def test_a_normal_exit_is_not_logged_as_a_crash(self, monkeypatch, caplog):
+        import logging
+        import pytest as _pytest
+        from tracker import cli
+
+        monkeypatch.setattr(cli, "run", lambda *a, **k: 0)
+        with caplog.at_level(logging.ERROR, logger=cli.log.name):
+            with _pytest.raises(SystemExit) as exc:
+                cli.main()
+        assert exc.value.code == 0
+        assert "did not finish" not in caplog.text

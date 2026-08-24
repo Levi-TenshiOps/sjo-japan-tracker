@@ -670,7 +670,23 @@ def run(argv: list[str] | None = None) -> int:
 
 
 def main() -> None:
-    sys.exit(run())
+    """Run, and make sure a crash says so in the log.
+
+    The scheduled task discards stderr, so before this an unhandled
+    exception left exit code 1 and a log file that simply stopped
+    mid-sentence. That is what the 09:03 run on 2026-08-24 looked like:
+    the grid finished, and then nothing, with no way to tell a crash from
+    a machine that went to sleep. `tracker.log` exists precisely so a run
+    leaves a trace, and the one run that most needs to leave one was the
+    one that could not.
+    """
+    try:
+        sys.exit(run())
+    except SystemExit:
+        raise
+    except BaseException:                   # noqa: BLE001 - then re-raised
+        log.exception("The run failed and did not finish")
+        raise
 
 
 if __name__ == "__main__":

@@ -886,6 +886,42 @@ through the same code path at 14:05 the same day: $1,347 in 26.2 seconds,
 path - which is the point. The defect was never the blackout, it was that
 a blackout could pass in silence.
 
+## A run that crashes must not do it silently, or on a file it only reads
+
+Two defects, one incident, found 2026-08-24 by noticing that
+`FlightTracker2` had last run with **result 1** while its siblings had 0.
+
+The 09:03 run finished the wide net and the grid, logged "12 usable
+option(s); 47 rejected; 8 request(s)", and stopped. No traceback, no
+"nothing usable", no email line. Exit code 1 and silence.
+
+**What crashed.** The line after that log reads `sweep_history.csv` for
+the price baseline - the file the sweeper appends to every ninety seconds,
+for ever. A read can land mid-append, and on Windows the tail of a file
+that has been extended but not yet flushed reads back as NUL bytes, which
+`csv` reports as `_csv.Error: line contains NUL`. Six scheduled runs a day
+read that file while the sweep writes it, so this is a permanent race, not
+a freak event. `_field()` - the fix for the malformed row that killed every
+run for four hours on 2026-08-23 - did not help, because it guards the
+*fields* and a torn write breaks the *iteration* before any field is
+reached.
+
+`history._rows` now stops quietly at a torn row. Stopping there is right
+rather than merely safe: every row already read is complete, and the lost
+tail is a few of the newest observations that the next run picks up
+anyway. `tests/test_history_concurrent_read.py` covers NUL padding, a cut
+mid-field, an unterminated quote and a split UTF-8 sequence.
+
+**Why nobody noticed.** The scheduled task discards stderr, so an
+unhandled exception left nothing anywhere. `tracker.log` was added on
+2026-08-23 precisely so a run leaves a trace, and the one run that most
+needed to leave one was the one that could not. `cli.main` now logs the
+traceback before re-raising.
+
+The lesson is the recurring one in a third costume: **never crash on a
+file you only read** - and if you do crash, say so where somebody will
+look. Grep for every reader when fixing one; there were five last time.
+
 ## Layout
 
 ```
