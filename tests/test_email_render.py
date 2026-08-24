@@ -336,3 +336,45 @@ class TestSweptFaresAreMarkedWithTheirAge:
                       stops=["ZRH"], airlines=["SWISS"], total_minutes=2780,
                       seen_at="2026-08-23T08:00:00+00:00")
         assert d.to_option().checked_at == "2026-08-23T08:00:00+00:00"
+
+
+class TestTheBandCutoffsAreStated:
+    """The bar showed two bare numbers and never said what they were.
+
+    Asked for by the trip owner 2026-08-23 after reading a live email: the
+    bar printed "$1,052" and "$3,765" at its ends, so there was no way to
+    tell at what price a fare stops being cheap and starts being typical.
+    Those numbers *are* the cut-offs - `classify` is `< low` cheap,
+    `low..high` typical, `> high` expensive - but nothing said so.
+    """
+
+    BANDS = PriceBands(low=1052, high=3765, usual=1640, source="GOOGLE")
+
+    def html(self):
+        return render_html([itin(fx.ZRH_OPTION)], self.BANDS, threshold=1400,
+                           is_great=False, generated_at="now")
+
+    def test_the_cheap_cutoff_is_named(self):
+        h = self.html()
+        assert "cheap" in h and "under $1,052" in h
+
+    def test_the_typical_range_is_named(self):
+        assert "$1,052" in self.html() and "$3,765" in self.html()
+
+    def test_the_expensive_cutoff_is_named(self):
+        assert "over $3,765" in self.html()
+
+    def test_the_plain_text_states_all_three(self):
+        c = render([itin(fx.ZRH_OPTION)], self.BANDS, threshold=1400,
+                   is_great=False, generated_at="now")
+        assert "CHEAP     under $1,052" in c.text
+        assert "TYPICAL   $1,052 to $3,765" in c.text
+        assert "EXPENSIVE over $3,765" in c.text
+
+    def test_the_labels_match_what_classify_actually_does(self):
+        """The email must not describe a rule the code does not follow."""
+        b = self.BANDS
+        assert b.classify(b.low - 1) == "CHEAP"
+        assert b.classify(b.low) == "TYPICAL"
+        assert b.classify(b.high) == "TYPICAL"
+        assert b.classify(b.high + 1) == "EXPENSIVE"

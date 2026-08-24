@@ -199,10 +199,16 @@ def _price_bar(price: int, bands: PriceBands) -> str:
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
                  border="0" style="width:100%;border-collapse:collapse;">
             <tr>
-              <td align="left" style="font:400 12px/1.4 {FONT};color:{MUTED};">
-                {escape(format_price(bands.low))}</td>
-              <td align="right" style="font:400 12px/1.4 {FONT};color:{MUTED};">
-                {escape(format_price(bands.high))}</td>
+              <td width="25%" align="left"
+                  style="font:400 11px/1.4 {FONT};color:{GREEN};">
+                cheap<br><span style="color:{MUTED};">under {escape(format_price(bands.low))}</span></td>
+              <td width="50%" align="center"
+                  style="font:400 11px/1.4 {FONT};color:{AMBER};">
+                typical<br><span style="color:{MUTED};">
+                {escape(format_price(bands.low))}&nbsp;&ndash;&nbsp;{escape(format_price(bands.high))}</span></td>
+              <td width="25%" align="right"
+                  style="font:400 11px/1.4 {FONT};color:{RED};">
+                expensive<br><span style="color:{MUTED};">over {escape(format_price(bands.high))}</span></td>
             </tr>
           </table>
         </td>
@@ -593,8 +599,13 @@ def render_text(
     )
     lines += [
         "-" * 46,
-        f"Usual range: {format_price(bands.low)} to "
-        f"{format_price(bands.high)}{usual}.",
+        # Spell out where each band starts and stops. The bar used to print
+        # the two boundary numbers bare, so it showed $1,052 and $3,765
+        # without ever saying those *were* the cut-offs.
+        f"CHEAP     under {format_price(bands.low)}",
+        f"TYPICAL   {format_price(bands.low)} to {format_price(bands.high)}"
+        f"{usual}",
+        f"EXPENSIVE over {format_price(bands.high)}",
         SOURCE_NOTE[bands.source],
         "",
         f"Checked {generated_at}. Two emails a day; the second is held "
