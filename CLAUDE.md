@@ -758,6 +758,50 @@ share: it did nothing. The guarantee is now "never skipped" rather than
 "taken immediately": the cursor does not advance on a hot or warm pick, so
 an unpriced window is still the next cold one, delayed by a launch or two.
 
+### Re-measured on 1,617 options: Monday is Liberia, and Saturday exists
+
+The weekday table above was derived from 1,165 observations. At 1,617 it
+sharpens, and one line of it was wrong.
+
+    departure day   SJO->ZRH direct   via LIR   of priced
+    Mon                     0            36        241
+    Tue                     0             0        210
+    Wed                    55             0        140
+    Thu                     0             0        140
+    Fri                    53             0        433
+    Sat                     9             0        212
+    Sun                     0             0        244
+
+**The Monday fares are not SJO-ZRH at all.** Every one of the 36 routes
+through **Liberia** - Costa Rica's second airport, which Edelweiss also
+serves from Zurich on a different rotation. So the carrier's Costa Rican
+gateway alternates, and a Monday departure reaches Zurich only by way of
+LIR. `LIR+ZRH` is 36 observations, cheapest $1,495, five at or under
+$1,600, always Edelweiss + SWISS.
+
+**Saturday now shows 9 direct SJO-ZRH routings**, against 0 of 58 when
+this was first measured. Not noise and not a schedule change we can
+prove - just a day that had barely been sampled. Tuesday, Thursday and
+Sunday remain at exactly 0 across 594 priced windows, which is the part
+that has held up.
+
+So the honest statement is: **SJO-ZRH direct on Wednesday, Friday and
+Saturday; Zurich via Liberia on Monday; nothing on Tuesday, Thursday or
+Sunday.** This is why `promising_weekday_pairs` is derived rather than
+written down - the literal `{Mon, Wed, Fri}` that looked obvious two days
+ago would have been wrong in both directions.
+
+At the production threshold ($1,400, ceiling $1,610) it currently derives
+**8 of 49 pairs** - Mon->Tue, Mon->Sun, Tue->Sun, Fri->Tue, Fri->Thu,
+Fri->Sun, Sun->Tue, Sun->Sun - so the warm tier is still aimed at ~16% of
+the space, as designed. Check that number when auditing it: pass the
+*production* threshold, not a round one. Reading it with `threshold=1600`
+gives a $1,840 ceiling, 37 of 49 pairs, and the false impression that the
+tier has degenerated into the plain cold rotation.
+
+**Every fare at or under $1,600 is Lufthansa Group.** 32 Edelweiss+SWISS,
+4 Lufthansa+ANA, 3 Lufthansa. Nothing else, in 1,617 observations.
+
 ## Boundary analysis: none of the other constraints are costing money
 
 Same 1,165 observations, looking at the 60 cheapest fares. If cheap fares
