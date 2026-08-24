@@ -11,49 +11,66 @@ from tracker.pricing import (
 
 
 class TestSeedBands:
-    def test_derived_from_google_email(self):
-        """CRC 550k-1050k at the rate implied by the two screenshots."""
-        assert SEED_BANDS.low == round(550_000 / CRC_PER_USD) == 1188
-        assert SEED_BANDS.high == round(1_050_000 / CRC_PER_USD) == 2269
-        assert SEED_BANDS.usual == round(615_055 / CRC_PER_USD) == 1329
+    def test_derived_from_visa_free_observations_not_from_google(self):
+        """Recalibrated 2026-08-23, and the reason matters.
+
+        The old seed came from a Google Flights digest ($1,188 / $1,329 /
+        $2,269). That is a Google-sourced number, so it carried exactly the
+        defect that demoted the GOOGLE band source below HISTORY: it
+        describes every routing Google sells, including the US and Canadian
+        transits this traveller cannot legally take. Demoting GOOGLE while
+        leaving a Google-derived seed underneath it fixed half the problem.
+
+        Against 1,165 visa-free observations of this route the median is
+        $2,866, not $1,329 - so $1,347, the cheapest fare found anywhere in
+        eight months, was being classified TYPICAL.
+        """
+        assert SEED_BANDS.low == 2213      # p20 of observed visa-free fares
+        assert SEED_BANDS.usual == 2866    # median
+        assert SEED_BANDS.high == 3202     # p80
+        assert SEED_BANDS.low < SEED_BANDS.usual < SEED_BANDS.high
 
     def test_fx_rate_matches_screenshots(self):
         """CRC 767,308 and $1,658 were the same Jan 15-24 itinerary."""
         assert round(767_308 / 1_658, 2) == CRC_PER_USD
 
     @pytest.mark.parametrize("price,band", [
-        (900, "CHEAP"), (1187, "CHEAP"), (1188, "TYPICAL"),
-        (1380, "TYPICAL"), (1658, "TYPICAL"), (2269, "TYPICAL"),
-        (2270, "EXPENSIVE"), (5000, "EXPENSIVE"),
+        (900, "CHEAP"), (1347, "CHEAP"), (2212, "CHEAP"), (2213, "TYPICAL"),
+        (2866, "TYPICAL"), (3202, "TYPICAL"),
+        (3203, "EXPENSIVE"), (5000, "EXPENSIVE"),
     ])
     def test_classification(self, price, band):
         assert SEED_BANDS.classify(price) == band
 
-    def test_screenshot_price_is_typical(self):
-        """Google itself labelled the $1,658 fare 'typical'. So must we."""
-        assert SEED_BANDS.classify(1658) == "TYPICAL"
+    def test_the_cheapest_fare_ever_found_reads_as_cheap(self):
+        """$1,347 is the best fare eight months of searching has produced.
 
-    def test_users_threshold_is_above_usual(self):
-        """$1,380 sits above the $1,329 travellers usually pay — worth knowing."""
-        assert SEED_BANDS.usual < 1380
+        Under the old Google-derived seed it classified as TYPICAL, which is
+        the single most misleading thing this table could have said.
+        """
+        assert SEED_BANDS.classify(1347) == "CHEAP"
+
+    def test_the_alert_threshold_is_far_below_usual(self):
+        """$1,400 should be a genuinely rare event, not a routine one."""
+        assert 1400 < SEED_BANDS.low < SEED_BANDS.usual
 
 
 class TestPosition:
     def test_always_clamped(self):
-        for p in (1, 500, 1188, 1700, 2269, 9999, 100000):
+        for p in (1, 500, 2213, 2700, 3202, 9999, 100000):
             assert 0.0 <= SEED_BANDS.position(p) <= 1.0
 
     def test_cheap_lands_in_green_quarter(self):
-        assert SEED_BANDS.position(800) <= 0.25
+        assert SEED_BANDS.position(1347) <= 0.25
 
     def test_expensive_lands_in_red_quarter(self):
-        assert SEED_BANDS.position(4000) >= 0.75
+        assert SEED_BANDS.position(5000) >= 0.75
 
     def test_typical_lands_in_middle(self):
-        assert 0.25 <= SEED_BANDS.position(1700) <= 0.75
+        assert 0.25 <= SEED_BANDS.position(2700) <= 0.75
 
     def test_monotonic(self):
-        prices = [500, 1000, 1188, 1500, 2000, 2269, 3000, 5000]
+        prices = [500, 1000, 2213, 2500, 2866, 3202, 4000, 5000]
         pos = [SEED_BANDS.position(p) for p in prices]
         assert pos == sorted(pos)
 
@@ -98,12 +115,15 @@ class TestResolve:
 
 class TestPresentation:
     def test_verdict_sentence(self):
-        assert verdict_sentence(1000, SEED_BANDS) == "$1,000 is cheap for this route"
-        assert verdict_sentence(1658, SEED_BANDS) == "$1,658 is typical for this route"
+        assert verdict_sentence(1347, SEED_BANDS) == "$1,347 is cheap for this route"
+        assert verdict_sentence(2700, SEED_BANDS) == "$2,700 is typical for this route"
 
     def test_savings(self):
-        assert savings_vs_usual(1200, SEED_BANDS) == 129
-        assert savings_vs_usual(1400, SEED_BANDS) is None
+        """Measured against the median visa-free fare, not against "what
+        travellers pay" - travellers buy the cheap end, not the median."""
+        assert savings_vs_usual(1347, SEED_BANDS) == 2866 - 1347
+        assert savings_vs_usual(2866, SEED_BANDS) is None
+        assert savings_vs_usual(3000, SEED_BANDS) is None
 
 
 class TestHistoryNeedsMultipleDays:

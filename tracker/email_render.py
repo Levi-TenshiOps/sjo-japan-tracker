@@ -355,7 +355,7 @@ def render_html(
     saving_line = (
         f"<p style=\"margin:0 0 4px;font:400 14px/1.6 {FONT};color:{GREEN};\">"
         f"That is {format_price(saving)} below the {format_price(bands.usual)} "
-        f"travellers usually pay.</p>"
+        f"median visa-free fare seen for these dates.</p>"
         if saving and bands.usual
         else ""
     )
@@ -548,7 +548,8 @@ def render_text(
     if saving and bands.usual:
         lines.append(
             f"That is {format_price(saving)} below the "
-            f"{format_price(bands.usual)} travellers usually pay."
+            f"{format_price(bands.usual)} median visa-free fare "
+            f"seen for these dates."
         )
         lines.append("")
 

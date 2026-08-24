@@ -87,27 +87,38 @@ class TestPriceVerdict:
         assert "expensive" in html.lower()
 
     def test_band_boundaries_displayed(self, content):
-        assert "$1,188" in content.html and "$2,269" in content.html
+        assert "$2,213" in content.html and "$3,202" in content.html
 
     def test_usual_price_displayed(self, content):
-        assert "$1,329" in content.html
+        assert "$2,866" in content.html
 
     def test_savings_line_when_below_usual(self, content):
-        assert "below the $1,329" in content.html
+        assert "below the $2,866" in content.html
+        assert "median visa-free fare" in content.html, (
+            "the old wording claimed this was what travellers PAY; it is "
+            "the median of what is OFFERED, and travellers buy the cheap end")
 
     def test_no_savings_line_when_above_usual(self):
-        html = render_html([itin(fx.ZRH_OPTION)], SEED_BANDS, threshold=2000,
+        """Bands built so the fare sits above `usual`, whatever the seed is."""
+        dear = PriceBands(low=500, high=800, usual=650, source="SEED")
+        html = render_html([itin(fx.ZRH_OPTION)], dear, threshold=2000,
                            is_great=False, generated_at="now")
         assert "below the" not in html
 
     def test_source_attribution(self, content):
-        assert "typical range Google publishes" in content.html
+        """The seed stopped being a Google figure on 2026-08-23.
+
+        It is now the median of visa-free fares this tracker recorded, so
+        crediting Google for it would be plainly false.
+        """
+        assert "visa-free San Jose to Tokyo fares this tracker" in content.html
+        assert "Google publishes" not in content.html
 
 
 class TestSubject:
     def test_has_price_and_verdict(self, items):
         s = build_subject(items, SEED_BANDS, is_great=False)
-        assert "$1,290" in s and "typical" in s
+        assert "$1,290" in s and "cheap" in s
 
     def test_great_says_book_now(self, items):
         s = build_subject(items, SEED_BANDS, is_great=True)

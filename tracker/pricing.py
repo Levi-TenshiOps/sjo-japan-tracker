@@ -25,12 +25,42 @@ from typing import Literal, Sequence
 Band = Literal["CHEAP", "TYPICAL", "EXPENSIVE"]
 Source = Literal["GOOGLE", "HISTORY", "SEED"]
 
-# Empirically derived from the two Google Flights screenshots.
 CRC_PER_USD = 462.79
 
-SEED_LOW_USD = round(550_000 / CRC_PER_USD)      # 1188
-SEED_HIGH_USD = round(1_050_000 / CRC_PER_USD)   # 2269
-SEED_USUAL_USD = round(615_055 / CRC_PER_USD)    # 1329
+# Recalibrated 2026-08-23 against 1,165 visa-free observations of this exact
+# route, and the old numbers are worth recording because they were wrong in
+# an instructive way.
+#
+# They came from a Google Flights digest for SJO-Tokyo: usual range
+# CRC 550,000-1,050,000, typical booking CRC 615,055, i.e. $1,188 / $2,269 /
+# $1,329. That is a Google-sourced figure, and it therefore carries exactly
+# the defect that got the GOOGLE band source demoted below HISTORY in the
+# first place: **it describes every routing Google sells, including the US
+# and Canadian transits this traveller cannot legally take.**
+#
+# Demoting GOOGLE while leaving a Google-derived SEED underneath it fixed
+# half the problem. Measured against visa-free fares only:
+#
+#     p20 $2,213    p50 $2,866    p80 $3,202    (n=1,165)
+#
+# against a seeded "usual" of $1,329 - understated by more than half. The
+# visible effect was that $1,347, the cheapest fare found anywhere in eight
+# months of searching, was classified TYPICAL rather than CHEAP.
+#
+# These are deliberately the visa-free percentiles. The seed only applies
+# until HISTORY has 25 observations across 5 distinct days, after which it
+# is replaced by the same percentiles computed on live data.
+#
+# One consequence had to be fixed alongside this. The email used to say the
+# saving was "below the $X travellers usually pay", which is a claim about
+# what people *pay*. This is the median of what is *offered*, and travellers
+# obviously do not buy the median - they buy the cheap end. At $1,329 the
+# sentence was merely understated; at $2,866 it would have been a confident
+# overclaim. The email now says "median visa-free fare seen for these
+# dates", which is exactly what the number is.
+SEED_LOW_USD = 2213      # p20 of observed visa-free fares
+SEED_HIGH_USD = 3202     # p80
+SEED_USUAL_USD = 2866    # median
 
 # Percentile cut-offs once we are running off our own history.
 CHEAP_PERCENTILE = 20
@@ -195,8 +225,8 @@ SOURCE_NOTE: dict[Source, str] = {
     "HISTORY": ("Based on visa-free fares this tracker has verified in a "
                 "browser - the ones you can actually book."),
     "SEED": (
-        "Based on the typical range Google publishes for San Jose to Tokyo, "
-        "converted to US dollars."
+        "Based on over 1,100 visa-free San Jose to Tokyo fares this tracker "
+        "recorded, pending enough days of history to compute it live."
     ),
 }
 
