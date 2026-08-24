@@ -393,6 +393,44 @@ about four minutes, six times a day - roughly 18 windows out of ~900. Taking
 and releasing per launch would recover that and add a lot of lock churn for
 a rounding error.
 
+## The sweep diagnosed a throttle it had caused itself
+
+The first live firing of the throttle alarm, 2026-08-24 11:40, and it was
+wrong. Worth keeping because the alarm did its job perfectly and still told
+the trip owner something false.
+
+    email:  "Empty rate is 70% ... Google has started returning empty pages"
+    truth:  Google was answering 15-16 options on most windows
+
+Three independent signals said the connection was fine: the scheduled runs'
+HTTP grid sat steady at 25% empty on a completely separate code path, the
+same runs' Chrome verification returned 15-16 options on four windows of
+six, and the sweep itself was logging fares throughout - FRA $1,880, AMS
+$2,221, MEX+MTY $2,377 - while claiming it was blocked.
+
+The cause was the re-check queue, added the same morning. A window is
+queued *because* it came back empty. Re-pricing it produces another empty,
+which was being fed into `recent`, which raises the measured empty rate,
+which trips the detector, which queues more windows. With a 1,262-window
+backlog draining at one launch in eight, that is a large and permanent
+thumb on the scale.
+
+`recent` measures *the connection*, so only a fresh pick is evidence about
+it. Re-checks are excluded now.
+
+Two things this does not change. A genuinely empty stretch of fresh picks
+still trips the detector - there is a test. And the underlying rate really
+is higher in October to December than the 13% baseline, which was measured
+on January and February: those months carry the Zurich routing and the
+others mostly do not. The ledger puts November at 44% empty against
+January's 32%. The 13% figure in this file is a January number, not a
+universal one.
+
+**The alarm was still worth having.** It fired within twenty minutes, said
+exactly what it thought was happening, and was specific enough to be
+checked and disproved in a few minutes. A vaguer warning would have been
+believed.
+
 ## The reboot launcher was still armed at --delay 6
 
 Found 2026-08-24, live on the machine, and the nastiest kind of bug: one

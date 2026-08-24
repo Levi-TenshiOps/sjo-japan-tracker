@@ -16,7 +16,8 @@ from tracker.browser import BrowserOption
 from tracker.schedule import Window
 from tracker import sweeper
 from tracker.sweeper import (
-    Discovery, SweepStore, next_window, sweep_batch,
+    EMPTY_ALARM_WINDOW, Discovery, SweepStore, looks_throttled,
+    next_window, sweep_batch,
 )
 
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -1667,3 +1668,64 @@ class TestTheInvariantIsHonestAboutWhatItKnows:
         sweep_batch(ws, s, batch=10, fetch=FakeChrome(dom),
                     sleep=lambda _: None, delay_s=0)
         assert len(s.checked) == s.windows_priced
+
+
+class TestReChecksDoNotPoisonTheHealthSample:
+    """The sweep must not diagnose a throttle it caused itself.
+
+    Windows land in the re-check queue *because* they came back empty. Feed
+    those re-checks into `recent` and they raise the measured empty rate,
+    which trips the throttle detector, which queues more windows, which
+    raises it further.
+
+    Live on 2026-08-24: the alarm emailed "70% empty" while Google was
+    answering 15-16 options on most windows, the independent HTTP grid sat
+    steady at 25%, and the sweep was logging fares the whole time. A
+    1,262-window backlog draining at one launch in eight was most of the
+    difference.
+
+    `recent` measures the connection, so only a fresh pick is evidence.
+    """
+
+    def test_a_recheck_does_not_count_as_evidence(self):
+        """Fewer health samples than windows priced: the difference is the
+        re-checks, which are not evidence about the connection."""
+        s = SweepStore()
+        ws = windows(6)
+        s.suspect = [ws[0].key, ws[1].key]
+        s.recent = [0] * 20                    # healthy, so re-checks run
+        before = len(s.recent)
+        sweep_batch(ws, s, batch=8, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        grew = len(s.recent) - before
+        assert grew < s.windows_priced, (
+            f"all {s.windows_priced} priced windows fed the health sample; "
+            f"re-checks should have been left out")
+
+    def test_fresh_picks_still_count(self, dom):
+        """The guard must not disable the detector altogether."""
+        s = SweepStore()
+        sweep_batch(windows(6), s, batch=6, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        assert len(s.recent) == 6
+        assert sum(s.recent) == 6
+
+    def test_a_real_throttle_is_still_detected(self):
+        """Nothing about this weakens the case it exists for."""
+        s = SweepStore()
+        sweep_batch(windows(40), s, batch=30, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        assert looks_throttled(s.recent), "a genuine all-empty run must trip it"
+
+    def test_an_all_recheck_batch_cannot_trip_it(self):
+        """The feedback loop, reproduced: drain a backlog of known-empty
+        windows and the detector must stay quiet."""
+        s = SweepStore()
+        ws = windows(30)
+        s.suspect = [w.key for w in ws]
+        s.recent = [0] * 20
+        sweep_batch(ws, s, batch=20, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        assert not looks_throttled(s.recent[-EMPTY_ALARM_WINDOW:]) or \
+            sum(s.recent[-EMPTY_ALARM_WINDOW:]) < EMPTY_ALARM_WINDOW, (
+            "draining a backlog convinced the sweep it was throttled")

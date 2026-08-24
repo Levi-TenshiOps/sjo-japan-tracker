@@ -912,8 +912,21 @@ def sweep_batch(
         # Record whether this window came back empty, and re-queue it if the
         # emptiness is suspicious - too fast to be a real page, or arriving
         # in the middle of a run of them.
-        store.recent.append(0 if options else 1)
-        del store.recent[:-EMPTY_ALARM_WINDOW * 2]
+        #
+        # Re-checks are deliberately left out of the health sample. They are
+        # windows queued *because* they came back empty, so re-pricing them
+        # produces more empties, which raises the measured empty rate, which
+        # trips the throttle detector, which queues more windows. A feedback
+        # loop that ends in the sweep reporting a throttle it caused itself.
+        #
+        # That is exactly what happened on 2026-08-24: the alarm fired at 70%
+        # while Google was in fact answering 15-16 options on most windows,
+        # the independent HTTP grid sat steady at 25%, and the sweep was
+        # still logging fares throughout. `recent` must measure the
+        # *connection*, so only a fresh pick is evidence about it.
+        if not replay:
+            store.recent.append(0 if options else 1)
+            del store.recent[:-EMPTY_ALARM_WINDOW * 2]
         throttled = looks_throttled(store.recent)
 
         # An empty answer used to leave no trace anywhere: nothing is written
