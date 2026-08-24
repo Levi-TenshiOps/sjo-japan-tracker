@@ -917,17 +917,35 @@ def sweep_batch(
 
         depart, ret = w.depart, w.back
         url = _search_url(origin, destination, depart, ret, max_stops)
-        started = time.monotonic()
+        elapsed = 0.0
+        measured = False
         try:
             # Per window, not per run. Holding it for a whole pass would
             # make the scheduled runs queue behind fourteen hours of sweep.
             with gate.google("sweep", path=lock_path, timeout=lock_timeout,
                              on_timeout="wait"):
+                # The clock starts *inside* the lock, and that placement is
+                # the whole point. `elapsed` is the throttle detector's only
+                # input and it also decides whether an empty answer may be
+                # trusted - and the sweep waits behind the scheduled runs'
+                # Chrome phase for about four minutes, six times a day.
+                # Timing from outside charged that wait to Google: measured
+                # 2026-08-24, one window recorded 216.5s when no real fetch
+                # can exceed its own 120s timeout and no page that returned
+                # fares has ever taken over 26.8s.
+                #
+                # It was wrong in both directions. A throttled page that had
+                # queued looked slow, so the detector missed it precisely
+                # when a scheduled run was hitting Google too; and the same
+                # window was then stamped `healthy`, meaning "genuinely
+                # empty, trusted", so it was never re-checked.
+                started = time.monotonic()
                 dom = grab(url)
+                elapsed = time.monotonic() - started
+                measured = True
         except Exception as exc:            # noqa: BLE001 - never die mid-sweep
             log.debug("sweep fetch failed for %s: %s", depart, exc)
             dom = ""
-        elapsed = time.monotonic() - started
 
         # Parse once, then filter, so the shortfall check can see what was
         # dropped and why. Filtering inside the comprehension hid both.
@@ -1047,11 +1065,15 @@ def sweep_batch(
             # one takes about 6. So only a *suspiciously fast* empty is
             # evidence of a throttle. A date Google genuinely has no flights
             # for still costs it the time to say so.
-            store.recent.append(
-                1 if (not parsed and elapsed < SUSPECT_FAST_SECONDS) else 0)
+            # A fetch that raised produced no timing, so it says nothing
+            # about the connection either way. Appending a 0 would be a
+            # sample claiming "not throttled" on no evidence.
+            if measured:
+                store.recent.append(
+                    1 if (not parsed and elapsed < SUSPECT_FAST_SECONDS) else 0)
+                del store.recent[:-EMPTY_ALARM_WINDOW * 2]
             store.recent_blank.append(0 if parsed else 1)
             del store.recent_blank[:-EMPTY_ALARM_WINDOW * 2]
-            del store.recent[:-EMPTY_ALARM_WINDOW * 2]
         throttled = looks_throttled(store.recent)
 
         # An empty answer used to leave no trace anywhere: nothing is written
@@ -1070,8 +1092,16 @@ def sweep_batch(
 
         store.checked[w.key] = {
             "at": _now(),
+            # Two different questions, and conflating them is what sent a
+            # 70% false alarm on 2026-08-24. `empty` is "nothing this
+            # passport can use"; `blank` is "Google returned no fares at
+            # all". A window answering with fourteen US-transit options is
+            # emptied by the visa rule, not by Google, and only `blank`
+            # says anything about the connection.
             "empty": not options,
-            "healthy": not throttled and elapsed >= SUSPECT_FAST_SECONDS,
+            "blank": not parsed,
+            "healthy": (measured and not throttled
+                        and elapsed >= SUSPECT_FAST_SECONDS),
             # Kept so the timing threshold can be re-calibrated from
             # real data rather than from the one measurement in 2026.
             "secs": round(elapsed, 1),
@@ -1085,7 +1115,8 @@ def sweep_batch(
         # failing means "unverified", not "no fares". A replay that comes
         # back empty while healthy is trustworthy, so it simply leaves the
         # list rather than looping there forever.
-        unverified = not options and (throttled or elapsed < SUSPECT_FAST_SECONDS)
+        unverified = not options and (throttled or not measured
+                                      or elapsed < SUSPECT_FAST_SECONDS)
         if unverified and w.key not in store.suspect:
             store.suspect.append(w.key)
 

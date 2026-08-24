@@ -1828,12 +1828,19 @@ class TestAThrottleIsFastAndABarrenDateIsNot:
     """
 
     def _clock(self, monkeypatch, per_window):
-        """Make each window appear to take `per_window` seconds."""
-        ticks = iter(range(0, 100000))
+        """Make each *fetch* appear to take `per_window` seconds.
+
+        One tick per call, and the sweep takes exactly two readings around
+        the fetch, so `elapsed` is `per_window` on the nose. It used to add
+        half a window per call and rely on `gate.google()` making up the
+        difference with its own `monotonic()` calls - which meant the test
+        passed for a reason that had nothing to do with the fetch, and
+        broke the moment the clock moved inside the lock (2026-08-24).
+        """
         base = [0.0]
 
         def fake():
-            base[0] += per_window / 2.0
+            base[0] += per_window
             return base[0]
 
         monkeypatch.setattr(sweeper.time, "monotonic", fake)
@@ -2041,3 +2048,94 @@ class TestPruningDoesNotLoseTheAccounting:
         s = self._store_with(3, lambda i: 1000 + i * 100)
         assert s.prune(max_entries=10) == 0
         assert s.checked == {}
+
+
+class TestTheClockTimesTheFetchNotTheQueue:
+    """`elapsed` must measure Google, not the wait for the Google lock.
+
+    `started` used to be read before `gate.google()`, so the sweep charged
+    Google for its own queueing. The scheduled runs hold that lock for
+    their whole Chrome phase - about four minutes, six times a day - and
+    the sweep waits behind them by design.
+
+    Measured against the live ledger on 2026-08-24: one window recorded
+    216.5s, when no fetch can outlive its own 120s timeout and no page that
+    returned fares has ever taken more than 26.8s.
+
+    It was wrong in both directions. A throttled page that had queued
+    looked slow, so the detector missed it exactly when a scheduled run was
+    also hitting Google; and that window was then stamped `healthy` -
+    "genuinely empty, trusted" - so it was never re-checked.
+    """
+
+    def _run(self, monkeypatch, *, lock_wait, fetch_secs, n=3):
+        base = [0.0]
+
+        def fake():
+            return base[0]
+
+        monkeypatch.setattr(sweeper.time, "monotonic", fake)
+
+        real_gate = sweeper.gate.google
+
+        class Waiting:
+            def __init__(self, *a, **k):
+                self.inner = real_gate(*a, **k)
+
+            def __enter__(self):
+                base[0] += lock_wait          # time spent queueing
+                return self.inner.__enter__()
+
+            def __exit__(self, *a):
+                return self.inner.__exit__(*a)
+
+        monkeypatch.setattr(sweeper.gate, "google", Waiting)
+
+        def slow_fetch(url):
+            base[0] += fetch_secs             # time spent on the fetch
+            return ""
+
+        s = SweepStore()
+        sweep_batch(windows(n), s, batch=n, fetch=slow_fetch,
+                    sleep=lambda _: None, delay_s=0)
+        return s
+
+    def test_a_long_queue_before_a_fast_empty_is_still_a_throttle(self, monkeypatch):
+        """The dangerous direction: a real throttle hidden by a lock wait."""
+        s = self._run(monkeypatch, lock_wait=240.0, fetch_secs=3.0)
+        assert sum(s.recent) == 3, "the lock wait was charged to Google"
+        assert all(v["secs"] == 3.0 for v in s.checked.values()), s.checked
+        assert not any(v["healthy"] for v in s.checked.values())
+
+    def test_a_long_queue_before_a_slow_empty_is_still_not_a_throttle(self, monkeypatch):
+        s = self._run(monkeypatch, lock_wait=240.0, fetch_secs=12.0)
+        assert sum(s.recent) == 0
+        assert all(v["secs"] == 12.0 for v in s.checked.values())
+        assert all(v["healthy"] for v in s.checked.values())
+
+    def test_no_queue_behaves_the_same(self, monkeypatch):
+        s = self._run(monkeypatch, lock_wait=0.0, fetch_secs=3.0)
+        assert sum(s.recent) == 3
+
+
+class TestTheLedgerSeparatesBlankFromUnusable:
+    """A page full of US transits is emptied by the visa rule, not Google.
+
+    Conflating those two is what sent a 70% false alarm on 2026-08-24. The
+    health sample was fixed that day; the ledger's own `empty` field was
+    not, and it is what any later re-calibration reads.
+    """
+
+    def test_a_visa_rejected_page_is_empty_but_not_blank(self, dom):
+        s = SweepStore()
+        sweep_batch(windows(1), s, batch=1, fetch=FakeChrome(dom),
+                    sleep=lambda _: None, delay_s=0, max_stops=None)
+        rec = next(iter(s.checked.values()))
+        assert rec["blank"] is False, "Google answered; the visa rule emptied it"
+
+    def test_a_truly_blank_page_is_both(self):
+        s = SweepStore()
+        sweep_batch(windows(1), s, batch=1, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0)
+        rec = next(iter(s.checked.values()))
+        assert rec["blank"] is True and rec["empty"] is True
