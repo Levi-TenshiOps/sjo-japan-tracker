@@ -166,7 +166,16 @@ class RotationState:
             return cls()
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError, ValueError):
+            return cls()
+        # Valid JSON is not the same as the object this expects:
+        # `json.loads("0")` returns an int and `.items()` then raises.
+        # That shape - a file truncated to a single character - is what
+        # killed every scheduled run for four hours on 2026-08-24. It was
+        # fixed in alerts, throttle, alarm and preferences; this reader and
+        # `gate._read` were both missed, and both sit on the path of every
+        # single run.
+        if not isinstance(data, dict):
             return cls()
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in data.items() if k in known})

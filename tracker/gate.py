@@ -80,10 +80,22 @@ def _alive(pid: int) -> bool:
 
 
 def _read(path: Path) -> dict | None:
+    """The lock file, or None if it cannot be trusted.
+
+    `json.loads("0")` succeeds and returns an int, and a lock file is
+    written by a process that can be killed mid-write - so "it parsed" is
+    not the same as "it is the object every caller here assumes". Without
+    the isinstance check `is_stale` calls `.get()` on an int and takes down
+    whichever process was unlucky, and this gate sits on *every* path to
+    Google: the sweep, all three phases of a scheduled run, and any
+    diagnostic script. The same bug was found and fixed in `alerts`,
+    `throttle`, `alarm` and `preferences`; this reader was missed.
+    """
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, ValueError):
         return None
+    return data if isinstance(data, dict) else None
 
 
 def is_stale(path: Path, *, stale_after: float = STALE_AFTER_SECONDS) -> bool:

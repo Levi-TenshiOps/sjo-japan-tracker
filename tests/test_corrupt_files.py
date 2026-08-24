@@ -112,3 +112,45 @@ def test_the_exact_production_failure(tmp_path):
         "FRA,Lufthansa,TYPICAL,CHROME,\n", encoding="utf-8")
     assert history.read_prices(str(p), origin="SJO",
                               band_source="CHROME") == [3087, 1720]
+
+
+class TestTheTwoReadersMissedTheFirstTime:
+    """`gate._read` and `RotationState.load` sit on every run's path.
+
+    The "valid JSON that is not an object" bug was fixed in alerts,
+    throttle, alarm and preferences on 2026-08-24. These two were missed,
+    which is the recurring lesson in this project: when fixing a rule, grep
+    for every path that should obey it.
+    """
+
+    BAD = ["0", '"a string"', "[1, 2, 3]", "null", "true"]
+
+    def test_rotation_state_survives_json_that_is_not_an_object(self, tmp_path):
+        from tracker.schedule import RotationState
+        for text in self.BAD:
+            p = tmp_path / "rotation.json"
+            p.write_text(text, encoding="utf-8")
+            assert RotationState.load(p) == RotationState(), text
+
+    def test_the_gate_survives_json_that_is_not_an_object(self, tmp_path):
+        from tracker import gate
+        for text in self.BAD:
+            p = tmp_path / "google.lock"
+            p.write_text(text, encoding="utf-8")
+            # A lock nobody can read is an abandoned lock, not a crash.
+            assert gate.is_stale(p) is True, text
+
+    def test_the_gate_still_hands_out_the_lock_over_a_junk_file(self, tmp_path):
+        from tracker import gate
+        p = tmp_path / "google.lock"
+        p.write_text("0", encoding="utf-8")
+        with gate.google("test", path=p, timeout=5.0):
+            pass                                    # must not raise
+
+    def test_a_real_rotation_file_still_loads(self, tmp_path):
+        from tracker.schedule import RotationState
+        p = tmp_path / "rotation.json"
+        s = RotationState()
+        s.slice_index = 7
+        s.save(p)
+        assert RotationState.load(p).slice_index == 7

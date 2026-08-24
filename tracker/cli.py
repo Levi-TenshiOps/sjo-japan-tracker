@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import logging
 import sys
 import time
@@ -55,11 +54,18 @@ def _setup_logging(verbose: bool, log_file: str = "") -> None:
 
 
 def _read_rows(path: str) -> list[dict]:
+    """The same tolerance `history.read_prices` needs, for the same reason.
+
+    `price_history.csv` is written by the run itself, so it is not in the
+    race that killed the 09:03 run on 2026-08-24 - but a run killed
+    mid-write leaves a torn tail *permanently*, and this project has
+    already lost a machine to a power cut. A torn tail here would crash
+    every subsequent run for ever, which is strictly worse than the race.
+    """
     p = Path(path)
     if not p.exists():
         return []
-    with p.open(newline="", encoding="utf-8") as fh:
-        return list(csv.DictReader(fh))
+    return list(history._rows(p))
 
 
 def _throttle_sample(searcher: Searcher, found) -> tuple[int, int]:
