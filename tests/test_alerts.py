@@ -309,6 +309,9 @@ class TestTheThrottleAlarm:
                                 suspect=41, rest_minutes=30, rest_number=2)
         assert "throttl" in c.subject.lower()
         assert "75%" in c.text and "15:20" in c.text
+        assert "4.5 seconds" in c.text, (
+            "the email must say what was measured: a fast empty is a refusal, "
+            "a slow one is just a date with no flights")
         assert "41 window(s)" in c.text
 
     def test_the_blocked_email_says_what_not_to_do(self):

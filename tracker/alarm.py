@@ -88,8 +88,10 @@ def blocked_email(*, empty_rate: float, since: str, suspect: int,
         "⚠ Google is throttling the flight tracker",
         [
             "Google has started returning empty pages instead of fares.",
-            f"Empty rate is {empty_rate:.0f}% over the last windows checked "
-            f"(13% is normal). First seen at {since[11:16]} UTC.",
+            f"{empty_rate:.0f}% of the last windows checked came back empty "
+            f"in under 4.5 seconds. A page Google really has no flights for "
+            f"takes about 12 seconds, so this is a refusal rather than a "
+            f"quiet date. First seen at {since[11:16]} UTC.",
             "",
             "The sweep has already stopped by itself and is resting for "
             f"{rest_minutes:.0f} minutes (rest #{rest_number}). Each rest "

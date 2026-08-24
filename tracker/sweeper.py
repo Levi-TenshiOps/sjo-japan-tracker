@@ -1091,10 +1091,15 @@ def sweep_batch(
                 if stopped:
                     break
                 continue
-            log.warning("Empty rate %.0f%% over the last %d windows - looks "
-                        "throttled, not empty. Slowing down; %d window(s) "
-                        "queued for a re-check once it clears.",
-                        rate, EMPTY_ALARM_WINDOW, len(store.suspect))
+            # Say what is actually being measured. "Empty rate" was the old
+            # wording and it is now wrong twice over: this counts only fast
+            # empties, and a date with no flights is not one of them.
+            log.warning("%.0f%% of the last %d windows came back empty *fast* "
+                        "(under %.1fs) - that is a throttle, not a quiet "
+                        "date. Slowing down; %d window(s) queued for a "
+                        "re-check once it clears.",
+                        rate, EMPTY_ALARM_WINDOW, SUSPECT_FAST_SECONDS,
+                        len(store.suspect))
         elif store.throttled_since:
             minutes = _age_hours(store.throttled_since) * 60
             log.info("Empty rate back to normal after %.0f min; "
