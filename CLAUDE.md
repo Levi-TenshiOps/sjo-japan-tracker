@@ -393,6 +393,36 @@ about four minutes, six times a day - roughly 18 windows out of ~900. Taking
 and releasing per launch would recover that and add a lot of lock churn for
 a rounding error.
 
+## The reboot launcher was still armed at --delay 6
+
+Found 2026-08-24, live on the machine, and the nastiest kind of bug: one
+that had already fired and was waiting to fire again.
+
+`install_schedule.py` writes a launcher into the Windows Startup folder so
+the sweep survives a reboot. The copy installed on 2026-08-23 at 06:47
+read:
+
+    start "" /min "...python.exe" -u sweep_forever.py --batch 25 --delay 6
+
+Six seconds is ~14,000 requests a day. It is the exact rate this file
+already blames for the day-long throttle that started a few hours later
+that same morning. The code default was moved to 90s the same day, and this
+file did not care: **a rate written into an unattended launcher outlives
+every later fix to the default.** Every reboot re-armed it.
+
+Both the live file and the generator are fixed, and the generator now
+spells out no rate at all - the default is the safe number, and the only
+way to keep it safe is to let the default be the answer.
+
+Its old comment claimed "safe to run twice", which was false until the
+single-instance guard was added the same day: two sweepers both hold the
+store in memory and write it per window, so their cursors overwrite each
+other and coverage silently goes backwards. It is true now.
+
+Three tests keep it shut: the installer prints no `--delay` at all, no fast
+rate appears in anything it prints, and `--help` still reports 90 as the
+default so the installer can safely rely on it.
+
 ## One malformed CSV line silently killed the product for four hours
 
 The worst failure this project has had, and the most instructive.

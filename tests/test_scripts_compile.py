@@ -295,3 +295,37 @@ class TestOnlyOneSweeperAtATime:
         f.write_text("999999", encoding="utf-8")
         sf.release_instance(str(f))
         assert f.exists(), "it deleted a lock it did not own"
+
+
+class TestTheInstallerNeverArmsTheThrottleAgain:
+    """The startup script it writes runs unattended at every boot.
+
+    Found 2026-08-24, live on the machine: `install_schedule.py` had written
+    `sweep_forever.py --batch 25 --delay 6` into the Windows Startup folder
+    on 2026-08-23. Six seconds is ~14,000 requests a day and is precisely
+    what threw the address into a day-long throttle that same morning.
+
+    The code default had since been made safe (90s), and this file did not
+    care - a rate written into an unattended launcher outlives every later
+    fix to the default. So it now spells out no rate at all.
+    """
+
+    def test_the_installer_emits_no_dangerous_delay(self):
+        src = (ROOT / "install_schedule.py").read_text(encoding="utf-8")
+        emitted = [ln for ln in src.splitlines()
+                   if "print(" in ln and "--delay" in ln]
+        assert emitted == [], f"the installer still writes a rate: {emitted}"
+
+    @pytest.mark.parametrize("bad", ["--delay 6", "--delay 8", "--delay 10"])
+    def test_no_fast_rate_is_printed_anywhere(self, bad):
+        src = (ROOT / "install_schedule.py").read_text(encoding="utf-8")
+        for ln in src.splitlines():
+            if "print(" in ln:
+                assert bad not in ln, ln
+
+    def test_the_safe_default_is_still_ninety(self):
+        """The installer relies on this, so it must not drift."""
+        done = subprocess.run(
+            [sys.executable, str(ROOT / "sweep_forever.py"), "--help"],
+            capture_output=True, text=True, timeout=60, cwd=str(ROOT))
+        assert "default 90" in done.stdout, done.stdout

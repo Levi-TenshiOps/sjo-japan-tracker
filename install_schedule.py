@@ -248,6 +248,11 @@ def print_windows(hours: list[int], root: Path) -> int:
     print("}")
     print(f'"registered {n_runs} daily runs"')
 
+    # No --delay is spelled out below on purpose: the default is 90s and
+    # the default is the safe number. A rate written into a file that runs
+    # unattended at every boot is how `--delay 6` survived on this machine
+    # long after the code default had been made safe - and it would have
+    # re-thrown the IP into a throttle at the next reboot.
     # The sweep is a service, not a scheduled job: it runs continuously and
     # resumes itself. An AtLogOn trigger would need admin rights; a file in
     # the Startup folder does not, and achieves the same thing.
@@ -259,7 +264,7 @@ def print_windows(hours: list[int], root: Path) -> int:
     print('  "@echo off",')
     print('  "cd /d \\"$root\\"",')
     print('  "start \\"\\" /min \\"$py\\" -u sweep_forever.py '
-          '--batch 25 --delay 6 >> \\"$root\\sweep.log\\" 2>&1"')
+          '--batch 25 >> \\"$root\\sweep.log\\" 2>&1"')
     print(")")
     print('Set-Content -Path (Join-Path $startup "FlightTrackerSweep.cmd") '
           "-Value $lines -Encoding ASCII")
@@ -267,7 +272,7 @@ def print_windows(hours: list[int], root: Path) -> int:
 
     print("\n\nTo start the sweep now rather than waiting for a logon:")
     print(f'  cd "{root}"')
-    print(f'  "{py}" sweep_forever.py --batch 25 --delay 6')
+    print(f'  "{py}" sweep_forever.py --batch 25')
     print("\nCheck on it any time with:  python sweep_forever.py --status")
     return 0
 
