@@ -63,7 +63,14 @@ class AlertState:
             return cls()
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError, ValueError):
+            return cls()
+        # `json.loads("0")` succeeds and returns an int, so a
+        # truncated write - the shape that killed the tracker via
+        # sweep_history.csv on 2026-08-24 - gets past the decode and
+        # blows up on `.items()`. Valid JSON is not the same as the
+        # object this expects.
+        if not isinstance(data, dict):
             return cls()
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in data.items() if k in known})

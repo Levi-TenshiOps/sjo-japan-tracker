@@ -396,8 +396,16 @@ class Preferences:
             )
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as exc:
+        except (json.JSONDecodeError, OSError, ValueError) as exc:
             raise PreferencesError(f"could not read {p}: {exc}") from exc
+        # A truncated write leaves valid JSON that is not an object -
+        # "0" decodes fine and then fails on .items(). Say what is
+        # wrong and what to do, rather than raising AttributeError
+        # from somewhere three frames down.
+        if not isinstance(data, dict):
+            raise PreferencesError(
+                f"{p} is not valid preferences (found {type(data).__name__}). "
+                f"It may have been truncated. Run:  python setup_tracker.py")
         known = {f for f in cls.__dataclass_fields__}
         prefs = cls(**{k: v for k, v in data.items() if k in known})
         prefs.trip_weeks = [int(w) for w in prefs.trip_weeks]

@@ -287,9 +287,17 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH, *, use_env: bool = True) -> Con
     data: dict[str, Any] = {}
     p = Path(path)
     if p.exists():
-        loaded = yaml.safe_load(p.read_text(encoding="utf-8"))
+        # Malformed YAML must stop the run - a config nobody can read is a
+        # real problem the trip owner has to fix - but it must say so as a
+        # ConfigError, not as a raw yaml.ParserError from three frames down.
+        try:
+            loaded = yaml.safe_load(p.read_text(encoding="utf-8"))
+        except (yaml.YAMLError, OSError, ValueError) as exc:
+            raise ConfigError(f"{path} is not readable YAML: {exc}") from exc
         if loaded and not isinstance(loaded, dict):
-            raise ConfigError(f"{path} must contain a YAML mapping")
+            raise ConfigError(
+                f"{path} must contain a YAML mapping, found "
+                f"{type(loaded).__name__}. It may have been truncated.")
         data = loaded or {}
 
     cfg = Config()

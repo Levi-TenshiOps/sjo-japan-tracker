@@ -141,6 +141,11 @@ def hours_since_last_email(state_path: str | Path,
     """
     try:
         data = json.loads(Path(state_path).read_text(encoding="utf-8"))
+        # Guard against valid JSON that is not an object. Written
+        # twenty minutes after fixing exactly this bug elsewhere,
+        # and it had it too.
+        if not isinstance(data, dict):
+            return None
         stamp = data.get("last_email_at") or ""
         if not stamp:
             return None
