@@ -239,6 +239,28 @@ def read_prices(
     return prices
 
 
+def distinct_days_across(paths, *, origin: str | None = None) -> int:
+    """Calendar days covered by several logs together.
+
+    The union, not the sum: the same day appearing in both files is one
+    day. The band threshold asks "do these prices span enough days to be a
+    distribution rather than a snapshot", and that question is about the
+    prices as a whole, however many files they arrived in.
+    """
+    days: set[str] = set()
+    for path in paths:
+        p = Path(path)
+        if not p.exists():
+            continue
+        for rec in _rows(p):
+            if origin and _field(rec, "origin").upper() != origin.upper():
+                continue
+            stamp = _field(rec, "checked_at_utc")[:10]
+            if len(stamp) == 10:
+                days.add(stamp)
+    return len(days)
+
+
 def distinct_days(path: str | Path, *, origin: str | None = None) -> int:
     """How many separate calendar days the log covers."""
     p = Path(path)

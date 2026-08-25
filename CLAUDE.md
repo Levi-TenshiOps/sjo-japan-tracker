@@ -1546,6 +1546,51 @@ Two details that matter:
   fix looked right and changed nothing, because the evidence it needed was
   being thrown away.
 
+## The price bar had an end nobody could reach
+
+The trip owner read a live email - "$1,641 is cheap", above a green zone
+labelled "under $2,213" - and asked what cheap actually reaches. Fair
+question: the cut-offs are percentiles, so both ends of the bar were open,
+and the bottom one sat *below the cheapest fare that has ever existed on
+this route*.
+
+This is a cousin of the defect that removed GOOGLE as a band source: **a
+band the data cannot reach is a broken gauge.** That one had a green zone
+no fare could enter. This one had a green zone with no floor.
+
+Each zone now closes on an observed value where there is one:
+
+    cheap      $1,347 - $2,213
+    typical    $2,213 - $3,202
+    expensive  $3,202 - $13,127
+
+`PriceBands.seen_low` / `seen_high` carry the real extremes, and
+`band_ranges` falls back to the open form when nothing has been observed
+below the cheap cut-off or above the dear one - inventing an end would be
+worse than not drawing one.
+
+**Where the numbers come from matters more than the format.** They are
+every Chrome observation in both logs: 2,811 on 2026-08-25, of which
+**2,210 come from the background sweep**. The scheduled runs price 8-13
+windows each; the sweep prices the whole calendar. Any statement about
+what this route costs is mostly the sweep's evidence.
+
+`distinct_days` was still counted on `price_history.csv` alone while the
+*prices* came from both files. Fixed with `distinct_days_across`, which
+takes the union - the threshold asks whether the prices span enough days
+to be a distribution rather than a snapshot, and that is a question about
+the prices, however many files they arrived in.
+
+**What changes when HISTORY finally qualifies** (5 distinct days, so
+around 2026-08-27), computed against the 2,811 observations already held:
+
+    now  (SEED)     cheap under $2,213    typical $2,213 - $3,202
+    then (HISTORY)  cheap under $1,840    typical $1,840 - $3,125
+
+The cheap cut-off tightens by $373 and starts meaning something: $1,347 to
+$1,840 is the band a fare has to enter, rather than anything under a
+number two thirds of the market already beats.
+
 ## Layout
 
 ```

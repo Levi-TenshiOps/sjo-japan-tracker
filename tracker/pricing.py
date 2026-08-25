@@ -19,7 +19,7 @@ so the email can be honest about where the judgement came from.
 from __future__ import annotations
 
 import statistics
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, Sequence
 
 Band = Literal["CHEAP", "TYPICAL", "EXPENSIVE"]
@@ -77,6 +77,28 @@ class PriceBands:
     high: int             # above this is EXPENSIVE
     usual: int | None     # typical booking price, for the marker
     source: Source
+    # The cheapest and dearest fares actually observed. The cut-offs above
+    # are percentiles, so on their own they say "under $2,213 is cheap"
+    # without ever saying what cheap *reaches* - and the trip owner asked
+    # the obvious question: a bar whose green zone starts below the
+    # cheapest fare that exists is a bar with an unreachable end. These
+    # make each zone show two real numbers instead of an open interval.
+    seen_low: int | None = None
+    seen_high: int | None = None
+
+    def with_observed(self, prices: Sequence[float]) -> "PriceBands":
+        """A copy carrying the real range of `prices`.
+
+        Kept separate from the cut-offs because the two answer different
+        questions: the cut-offs are where the colours change, the range is
+        what the market actually did. They also come from different
+        populations when the bands fall back to SEED.
+        """
+        clean = [float(p) for p in prices if p and float(p) > 0]
+        if not clean:
+            return self
+        return replace(self, seen_low=int(round(min(clean))),
+                       seen_high=int(round(max(clean))))
 
     def classify(self, price_usd: float) -> Band:
         if price_usd < self.low:
@@ -130,6 +152,8 @@ def bands_from_history(
     if high <= low:
         return None
     return PriceBands(
+        seen_low=int(round(min(clean))),
+        seen_high=int(round(max(clean))),
         low=int(round(low)),
         high=int(round(high)),
         usual=int(round(statistics.median(clean))),

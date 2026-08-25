@@ -558,12 +558,26 @@ def run(argv: list[str] | None = None) -> int:
         # so its observations are most of the baseline.
         hist_prices += history.read_prices(
             cfg.sweep_history_csv, origin=cfg.origins[0], band_source="CHROME")
-        hist_days = history.distinct_days(cfg.history_csv, origin=cfg.origins[0])
+        # Count the days across *both* logs, because the prices come from
+        # both. The sweep contributes the large majority - 2,210 of 2,811
+        # Chrome observations on 2026-08-25 - and it is the only thing that
+        # prices the whole calendar, so judging "enough days" on the
+        # scheduled runs' own file alone could hold the real bands back on
+        # evidence the tracker already has.
+        hist_days = history.distinct_days_across(
+            [cfg.history_csv, cfg.sweep_history_csv], origin=cfg.origins[0])
     bands = pricing.resolve_bands(
         google_bands=google_bands,
         history_prices=hist_prices,
         history_days=hist_days,
     )
+    # Close the bar's ends with what has actually been seen. The cut-offs
+    # are percentiles and say nothing about what cheap *reaches*, which is
+    # how the email came to show "$1,641 is cheap" above a green zone
+    # starting below any fare that exists. `hist_prices` is every Chrome
+    # observation from both logs - and most of them come from the
+    # background sweep, the only thing that prices the whole calendar.
+    bands = bands.with_observed(hist_prices)
     log.info("Bands (%s): cheap < %s, expensive > %s", bands.source,
              format_price(bands.low), format_price(bands.high))
     # Google's own range is still worth recording even though it no longer

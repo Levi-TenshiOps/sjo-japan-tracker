@@ -143,9 +143,50 @@ def build_subject(
 # --- HTML ------------------------------------------------------------------
 
 
+def _nb(text: str) -> str:
+    """Escape, and keep a price range on one line.
+
+    Only the dash is protected. Replacing every space would turn the
+    fallback "under $2,213" into "under&nbsp;$2,213", which reads fine in
+    a browser and is noise to anything that greps the message.
+    """
+    return escape(text).replace(" – ", "&nbsp;&ndash;&nbsp;")
+
+
+def band_ranges(bands: PriceBands) -> tuple[str, str, str]:
+    """(cheap, typical, expensive) as ranges of real numbers.
+
+    The cut-offs alone give "under $2,213" and "over $3,202" - open at both
+    ends, so the bar never says what cheap actually reaches. The trip owner
+    asked for that directly, having read "$1,641 is cheap" above a green
+    zone starting below any fare that exists.
+
+    So each zone is closed with an observed value where there is one: the
+    cheapest fare ever recorded at the bottom, the dearest at the top. Both
+    come from every Chrome observation the project holds - 2,804 of them on
+    2026-08-25, and 2,210 of those from the background sweep, which is the
+    only thing that prices the whole calendar.
+
+    Falls back to the open form when nothing has been observed yet, because
+    inventing an end would be worse than not drawing one.
+    """
+    lo, hi = format_price(bands.low), format_price(bands.high)
+    typical = f"{lo} – {hi}"
+    if bands.seen_low is not None and bands.seen_low < bands.low:
+        cheap = f"{format_price(bands.seen_low)} – {lo}"
+    else:
+        cheap = f"under {lo}"
+    if bands.seen_high is not None and bands.seen_high > bands.high:
+        dear = f"{hi} – {format_price(bands.seen_high)}"
+    else:
+        dear = f"over {hi}"
+    return cheap, typical, dear
+
+
 def _price_bar(price: int, bands: PriceBands) -> str:
     """Google-style cheap/typical/expensive bar with a marker."""
     band = bands.classify(price)
+    _cheap_txt, _typical_txt, _dear_txt = band_ranges(bands)
     color = BAND_COLOR[band]
     pos = max(0.0, min(1.0, bands.position(price)))
     left_pct = round(pos * 100, 2)
@@ -201,14 +242,14 @@ def _price_bar(price: int, bands: PriceBands) -> str:
             <tr>
               <td width="25%" align="left"
                   style="font:400 11px/1.4 {FONT};color:{GREEN};">
-                cheap<br><span style="color:{MUTED};">under {escape(format_price(bands.low))}</span></td>
+                cheap<br><span style="color:{MUTED};">{_nb(_cheap_txt)}</span></td>
               <td width="50%" align="center"
                   style="font:400 11px/1.4 {FONT};color:{AMBER};">
                 typical<br><span style="color:{MUTED};">
-                {escape(format_price(bands.low))}&nbsp;&ndash;&nbsp;{escape(format_price(bands.high))}</span></td>
+                {_nb(_typical_txt)}</span></td>
               <td width="25%" align="right"
                   style="font:400 11px/1.4 {FONT};color:{RED};">
-                expensive<br><span style="color:{MUTED};">over {escape(format_price(bands.high))}</span></td>
+                expensive<br><span style="color:{MUTED};">{_nb(_dear_txt)}</span></td>
             </tr>
           </table>
         </td>
@@ -597,15 +638,17 @@ def render_text(
     usual = (
         f", typically booked at {format_price(bands.usual)}" if bands.usual else ""
     )
+    _cheap_r, _typical_r, _dear_r = band_ranges(bands)
     lines += [
         "-" * 46,
         # Spell out where each band starts and stops. The bar used to print
         # the two boundary numbers bare, so it showed $1,052 and $3,765
         # without ever saying those *were* the cut-offs.
-        f"CHEAP     under {format_price(bands.low)}",
-        f"TYPICAL   {format_price(bands.low)} to {format_price(bands.high)}"
-        f"{usual}",
-        f"EXPENSIVE over {format_price(bands.high)}",
+        # Closed at both ends where there is an observation to close them
+        # with, so "cheap" says what cheap reaches rather than trailing off.
+        f"CHEAP     {_cheap_r.replace(chr(0x2013), 'to')}",
+        f"TYPICAL   {_typical_r.replace(chr(0x2013), 'to')}{usual}",
+        f"EXPENSIVE {_dear_r.replace(chr(0x2013), 'to')}",
         SOURCE_NOTE[bands.source],
         "",
         f"Checked {generated_at}. Two emails a day; the second is held "
