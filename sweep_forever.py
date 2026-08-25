@@ -172,7 +172,7 @@ def main() -> int:
     # health was unreadable for exactly this reason, while sweep.log still
     # held a previous run's output and looked current. Append, with the date
     # in the file's format, so one file covers the whole history.
-    if args.log and not (args.status or args.readiness):
+    if args.log and not (args.status or args.readiness or args.coverage):
         try:
             fh = logging.FileHandler(args.log, encoding="utf-8")
             fh.setFormatter(logging.Formatter(
@@ -197,7 +197,15 @@ def main() -> int:
     # and on 2026-08-24, after a day of restarting to pick up fixes, the
     # store held 459 findings against a MAX_ENTRIES of 400. Harmless in
     # itself, but the cap exists to bound the file and it was not binding.
-    if not (args.status or args.readiness):
+    # Every command that only *reports* must leave the store alone. The
+    # sweep holds it in memory and rewrites it per window, so a second
+    # process writing it is the "two sweepers" hazard this project already
+    # warns about - cursors overwrite each other and coverage silently goes
+    # backwards. `--coverage` was missed when `--status` and `--readiness`
+    # were excluded, so asking how complete the sweep was could perturb the
+    # thing being asked about.
+    read_only = args.status or args.readiness or args.coverage
+    if not read_only:
         dropped = store.prune()
         if dropped:
             # Persist it. Pruning in memory only would be lost the moment
@@ -210,7 +218,7 @@ def main() -> int:
     # A restart after a gap judges the connection fresh. Without this a
     # sweep stopped while throttled comes straight back up in 4x backoff on
     # yesterday's evidence, and needs two hours of crawling to disprove it.
-    if not (args.status or args.readiness) and store.forget_stale_health():
+    if not read_only and store.forget_stale_health():
         log.info("Idle a while; forgetting the old connection-health "
                  "samples and judging this stretch fresh.")
 

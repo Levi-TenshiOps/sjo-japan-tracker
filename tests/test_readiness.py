@@ -131,3 +131,36 @@ class TestItNeverTouchesTheNetwork:
 
         monkeypatch.setattr(sw, "fetch_dom", boom, raising=False)
         run()
+
+
+class TestReportingCommandsNeverWriteTheStore:
+    """`--status`, `--coverage` and `--readiness` only report.
+
+    The sweep holds the store in memory and rewrites it after every window,
+    so a second process writing it is the "two sweepers" hazard: the
+    cursors overwrite each other and coverage silently goes backwards.
+
+    `--coverage` was missed when the other two were excluded, so asking how
+    complete the sweep was could perturb the very thing being asked about.
+    Found 2026-08-24 after it had been run twice against a live sweep.
+    """
+
+    def _guard(self) -> str:
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parent.parent
+        return (root / "sweep_forever.py").read_text(encoding="utf-8")
+
+    def test_coverage_is_treated_as_read_only(self):
+        src = self._guard()
+        assert "read_only = args.status or args.readiness or args.coverage" in src
+
+    def test_the_startup_prune_is_behind_that_guard(self):
+        src = self._guard()
+        i = src.find("read_only = args.status")
+        j = src.find("store.prune()", i)
+        assert i > 0 and j > i, "prune no longer follows the read_only guard"
+        assert "if not read_only:" in src[i:j]
+
+    def test_forgetting_health_is_behind_it_too(self):
+        src = self._guard()
+        assert "if not read_only and store.forget_stale_health():" in src

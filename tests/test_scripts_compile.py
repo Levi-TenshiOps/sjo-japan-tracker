@@ -168,8 +168,14 @@ def test_the_store_is_pruned_on_startup(tmp_path):
     prefs_path = tmp_path / "prefs.json"
     prefs_path.write_text(json.dumps(prefs), encoding="utf-8")
 
+    # `--recheck-unverified` rather than `--coverage`: the latter became
+    # read-only on 2026-08-24, because a reporting command that writes the
+    # store is the "two sweepers" hazard - it was being run against a live
+    # sweep, whose in-memory copy would then overwrite it. This needs a
+    # command that legitimately writes and still makes no request.
     done = subprocess.run(
-        [sys.executable, str(ROOT / "sweep_forever.py"), "--coverage",
+        [sys.executable, str(ROOT / "sweep_forever.py"),
+         "--recheck-unverified",
          "--preferences", str(prefs_path), "--store", str(store_path),
          "--log", ""],
         capture_output=True, text=True, timeout=90, cwd=str(ROOT))
