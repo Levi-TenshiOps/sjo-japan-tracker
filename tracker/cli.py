@@ -359,6 +359,12 @@ def run(argv: list[str] | None = None) -> int:
         # hot list, spent Chrome budget, and could reach the email as a fare
         # in a month they had ruled out.
         months_asked = wide_net_months(prefs)
+        # Every departure date the tracker would actually search. The wide
+        # net uses it twice: to skip asking about a half-month that holds
+        # none of them, and to refuse a hint that lands outside them.
+        searchable = schedule.generate_windows(prefs)
+        departures = {w.depart for w in searchable}
+        searchable_keys = {w.key for w in searchable}
         with gate.google("run:wide-net", path=cfg.google_lock):
             month_hints = monthly.scan_months(
                 fetch_text_query,
@@ -368,13 +374,16 @@ def run(argv: list[str] | None = None) -> int:
                 min_nights=min(nights) if nights else None,
                 max_nights=max(nights) if nights else None,
                 halves=cfg.monthly_scan_halves,
+                departures=departures,
                 delay_s=cfg.monthly_scan_delay_seconds,
             )
         # The real probe count, not the month count. With `halves` on the
         # net sends 8 whole-month queries plus 16 half-month ones, and this
         # line reported "8 requests" for all 24 of them - which quietly
         # understated the project's daily footprint by 96 requests.
-        asked = len(monthly.probe_count(months_asked, halves=cfg.monthly_scan_halves))
+        asked = len(monthly.probe_count(months_asked,
+                                        halves=cfg.monthly_scan_halves,
+                                        departures=departures))
         for h in month_hints:
             log.info("Month hint  %s", h.describe())
         # Keep them. The hints are the only price data this project has for
@@ -386,7 +395,22 @@ def run(argv: list[str] | None = None) -> int:
         except OSError as exc:
             log.debug("could not record month hints: %s", exc)
         if month_hints:
-            keys = monthly.hint_window_keys(month_hints)
+            # Second pass, deliberately, in the same spirit as
+            # `itinerary.validate()` re-checking the visa after Google's
+            # `connecting_airports` filter: what we asked for and what came
+            # back are not the same thing. Google answers a month query
+            # with whatever window it likes, and that window may be one
+            # `whole_trip_in_searched_months` excluded - a late-March
+            # departure coming home in April, say. Such a hint goes to the
+            # *front* of the hot list and buys a Chrome launch, so letting
+            # it through spends the scarcest budget in the project on a
+            # trip nobody would take.
+            keys = [k for k in monthly.hint_window_keys(month_hints)
+                    if k in searchable_keys]
+            skipped = len(month_hints) - len(keys)
+            if skipped:
+                log.info("Ignoring %d hint(s) for window(s) outside the "
+                         "searched months", skipped)
             hot = keys + [k for k in hot if k not in set(keys)]
             log.info("Wide net: %d hint(s) from %d request(s); cheapest $%s",
                      len(month_hints), asked,

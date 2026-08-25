@@ -163,7 +163,15 @@ def months_in_window(earliest: Date, latest: Date) -> list[tuple[str, int]]:
     return out
 
 
-def month_halves(months: Sequence[tuple[str, int]]) -> list[tuple[str, str, int]]:
+_MONTH_NUMBER: dict[str, int] = {
+    "January": 1, "February": 2, "March": 3, "April": 4, "May": 5,
+    "June": 6, "July": 7, "August": 8, "September": 9, "October": 10,
+    "November": 11, "December": 12,
+}
+
+
+def month_halves(months: Sequence[tuple[str, int]],
+                 departures: Iterable | None = None) -> list[tuple[str, str, int]]:
     """(query fragment, label, anchor year) for each half of each month.
 
     Google answers one recommendation per query, so a narrower range can
@@ -171,7 +179,22 @@ def month_halves(months: Sequence[tuple[str, int]]) -> list[tuple[str, str, int]
     2026-08-22, "January 16 to January 31 2027" named a $1,387 window that
     "in January 2027" did not. It is additive, not a replacement: five of
     eight narrow queries that day returned no hint at all.
+
+    `departures`, when given, is every departure date the tracker would
+    actually search, and a half containing none of them is not asked about.
+    Measured 2026-08-24: **"March 16 to March 31 2027" has zero**, because
+    `whole_trip_in_searched_months` drops any March departure that would
+    come home in April - yet it was being asked six times a day, for ever.
+
+    Two costs, and the second is the worse one. Six wasted requests a day
+    on an address this project works hard not to annoy; and a hint that
+    *did* come back would go to the front of the hot list and spend a
+    Chrome launch on a trip nobody would take. That is the same defect
+    already found once here - "the wide net kept querying excluded months".
     """
+    wanted = None
+    if departures is not None:
+        wanted = {(d.year, d.month, 1 if d.day <= 15 else 2) for d in departures}
     out: list[tuple[str, str, int]] = []
     for label, year in months:
         name, _, yr = label.rpartition(" ")
@@ -179,8 +202,15 @@ def month_halves(months: Sequence[tuple[str, int]]) -> list[tuple[str, str, int]
         last = _LAST_DAY.get(name, 30)
         if name == "February" and yr % 4 == 0 and (yr % 100 != 0 or yr % 400 == 0):
             last = 29
-        out.append((f"{name} 1 to {name} 15 {yr}", f"{label} (1st half)", yr))
-        out.append((f"{name} 16 to {name} {last} {yr}", f"{label} (2nd half)", yr))
+        month_no = _MONTH_NUMBER.get(name)
+        for half, fragment, tail in (
+            (1, f"{name} 1 to {name} 15 {yr}", "1st half"),
+            (2, f"{name} 16 to {name} {last} {yr}", "2nd half"),
+        ):
+            if wanted is not None and month_no is not None:
+                if (yr, month_no, half) not in wanted:
+                    continue
+            out.append((fragment, f"{label} ({tail})", yr))
     return out
 
 
@@ -193,6 +223,7 @@ def scan_months(
     min_nights: int | None = None,
     max_nights: int | None = None,
     halves: bool = False,
+    departures: Iterable | None = None,
     delay_s: float = 3.0,
     jitter_s: float = 2.0,
     sleep: Callable[[float], None] = time.sleep,
@@ -216,7 +247,7 @@ def scan_months(
     """
     probes = [(f"in {label}", label, year) for label, year in months]
     if halves:
-        probes += month_halves(months)
+        probes += month_halves(months, departures)
 
     hints: list[MonthHint] = []
     seen_windows: set[str] = set()
@@ -389,7 +420,8 @@ def format_ledger(ledger: dict, *, threshold: int | None = None,
 
 
 def probe_count(months: Sequence[tuple[str, int]], *,
-                halves: bool = False) -> list:
+                halves: bool = False,
+                departures: Iterable | None = None) -> list:
     """Every probe `scan_months` would send for these months.
 
     Exists because `cli.py` reported the *month* count as the request count.
@@ -399,5 +431,5 @@ def probe_count(months: Sequence[tuple[str, int]], *,
     """
     probes = [(f"in {label}", label, year) for label, year in months]
     if halves:
-        probes += month_halves(months)
+        probes += month_halves(months, departures)
     return probes
