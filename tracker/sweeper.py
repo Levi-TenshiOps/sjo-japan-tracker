@@ -163,6 +163,13 @@ class SweepStore:
     recent: list = field(default_factory=list)
     # Plain emptiness, for reporting only. Never drives the alarm.
     recent_blank: list = field(default_factory=list)
+    # 1 when a launch came back with fares on the page, 0 when it did not.
+    # Unlike `recent` and `recent_blank` this records *every* launch,
+    # re-checks and focus picks included, because a re-check that succeeds
+    # is perfectly good evidence that Google is answering. The exclusion
+    # those two carry exists to stop re-check *empties* inflating the
+    # throttle signal; a success inflates nothing.
+    recent_worked: list = field(default_factory=list)
     # Windows whose "no fares" answer arrived while the connection looked
     # throttled. They are not empty, they are *unverified*, and they stay
     # here until they can be re-checked during a healthy stretch.
@@ -244,6 +251,8 @@ class SweepStore:
                      "before the meaning changed; judging fresh.",
                      len(store.recent))
             store.recent.clear()
+            store.recent_blank.clear()
+            store.recent_worked.clear()
             store.throttled_since = ""
             store.consecutive_rests = 0
         return store
@@ -316,6 +325,8 @@ class SweepStore:
         if _age_hours(self.last_active, now) <= max_idle_hours:
             return False
         self.recent.clear()
+        self.recent_blank.clear()
+        self.recent_worked.clear()
         self.throttled_since = ""
         self.consecutive_rests = 0
         return True
@@ -837,6 +848,29 @@ def promising_weekday_pairs(store: "SweepStore", *, threshold: int | None,
 # built on, and letting it go stale to finish a backfill sooner is a bad
 # trade at any speed.
 FOCUS_HOT_EVERY = 5
+
+
+def connection_proven(store: "SweepStore", window: int | None = None) -> bool:
+    """Did anything in the recent stretch actually come back with fares?
+
+    This is the evidence that makes an empty answer *mean* something. On
+    its own an empty page says nothing about the connection - measured
+    2026-08-24, a date with no flights answers in 3.6-4.6 seconds and a
+    refusal looks identical.
+
+    So an empty result is trusted only when something nearby worked. The
+    previous rule required the empty page itself to have taken at least
+    SUSPECT_FAST_SECONDS, which is unsatisfiable: an empty page is always
+    fast. That made `healthy` permanently False for genuinely empty
+    windows, so the re-check queue could never drain - it sat at ~1,330
+    through five hours of continuous sweeping, rising as often as falling.
+
+    Absence of evidence is not trust: right after a throttle rest both
+    samples are cleared, so nothing is proven and empties stay queued.
+    That blind spot is deliberate and this preserves it.
+    """
+    seen = list(store.recent_worked)[-(window or EMPTY_ALARM_WINDOW):]
+    return any(seen)
 
 
 def focus_pending(windows: Sequence, store: "SweepStore",
@@ -1423,8 +1457,15 @@ def sweep_batch(
                 del store.recent[:-EMPTY_ALARM_WINDOW * 2]
             store.recent_blank.append(0 if parsed else 1)
             del store.recent_blank[:-EMPTY_ALARM_WINDOW * 2]
+        # Every launch, including re-checks and focus picks - see
+        # `connection_proven`. Without this a focus records nothing at all
+        # (its picks are re-checks), so nothing is ever proven and the
+        # first empty window it meets is re-priced for ever.
+        store.recent_worked.append(1 if parsed else 0)
+        del store.recent_worked[:-EMPTY_ALARM_WINDOW * 2]
         throttled = looks_throttled(store.recent,
                                     blank=store.recent_blank)
+        proven = connection_proven(store)
 
         # An empty answer used to leave no trace anywhere: nothing is written
         # to sweep_history, and `found` only holds windows that produced a
@@ -1450,8 +1491,28 @@ def sweep_batch(
             # says anything about the connection.
             "empty": not options,
             "blank": not parsed,
-            "healthy": (measured and not throttled
-                        and elapsed >= SUSPECT_FAST_SECONDS),
+            # "Was the connection trustworthy when this was checked?" -
+            # and nothing else. It used to also require the page to have
+            # taken at least SUSPECT_FAST_SECONDS, which quietly made it
+            # unsatisfiable: measured 2026-08-24, a page with no fares
+            # comes back in 3.6-4.6s *always*, so an empty window could
+            # never be marked healthy, could never leave the re-check
+            # queue, and was re-priced for ever.
+            #
+            # The backlog is the proof. It sat at ~1,330 for five hours of
+            # continuous sweeping, rising as often as falling, because
+            # every genuinely empty window went straight back on the end
+            # of it. And `focus_pending` reads the same flag, so a focus
+            # would loop on the first empty window and never complete -
+            # observed live, re-pricing 2027-01-03 +33n on consecutive
+            # launches.
+            #
+            # The timing term was measuring whether the page had fares, not
+            # whether Google was answering. `looks_throttled` is the
+            # connection signal now, and it asks the question that can
+            # actually be answered: did anything in this stretch come back
+            # with fares on it.
+            "healthy": measured and not throttled and proven,
             # Kept so the timing threshold can be re-calibrated from
             # real data rather than from the one measurement in 2026.
             "secs": round(elapsed, 1),
@@ -1465,8 +1526,10 @@ def sweep_batch(
         # failing means "unverified", not "no fares". A replay that comes
         # back empty while healthy is trustworthy, so it simply leaves the
         # list rather than looping there forever.
-        unverified = not options and (throttled or not measured
-                                      or elapsed < SUSPECT_FAST_SECONDS)
+        # Same correction, same reason: a fast empty is what a date with no
+        # flights looks like, not what a refusal looks like. Re-queueing on
+        # speed alone is what made the queue undrainable.
+        unverified = not options and (throttled or not measured or not proven)
         if unverified and w.key not in store.suspect:
             store.suspect.append(w.key)
 
@@ -1523,6 +1586,8 @@ def sweep_batch(
                         "rest_number": store.consecutive_rests})
                 stopped = rest_in_slices(sleep, rest_for, should_stop)
                 store.recent.clear()        # judge the next stretch afresh
+                store.recent_blank.clear()
+                store.recent_worked.clear()  # and "did anything work"
                 store.throttled_since = ""
                 if stopped:
                     break

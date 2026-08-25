@@ -184,3 +184,76 @@ class TestItNeverAsksForMoreRequests:
                     sleep=naps.append, delay_s=90.0, focus_months=[1])
         assert naps, "the focus skipped the pacing"
         assert all(n > 0 for n in naps)
+
+
+class TestAnEmptyWindowCanActuallyBeFinished:
+    """The bug that made both the queue and a focus unfinishable.
+
+    `healthy` used to require the page to have taken at least
+    SUSPECT_FAST_SECONDS. An empty page never does - measured 2026-08-24, a
+    date with no flights answers in 3.6-4.6s, always - so a genuinely empty
+    window could never be marked healthy, never left the re-check queue,
+    and never left `focus_pending`.
+
+    The live proof was the backlog sitting at ~1,330 through five hours of
+    continuous sweeping, rising as often as falling, and a focus observed
+    re-pricing 2027-01-03 +33n on consecutive launches for ever.
+
+    An empty is trusted when something nearby came back with fares -
+    positive evidence - and not on the strength of its own timing.
+    """
+
+    def _all_empty_then_a_fare(self):
+        """A fetch that answers with fares once, then always empty."""
+        dom = _io.open(FIXTURE, encoding="utf-8").read()
+        state = {"n": 0}
+
+        def fetch(url):
+            state["n"] += 1
+            return dom if state["n"] == 1 else ""
+
+        return fetch
+
+    def test_an_empty_leaves_the_queue_once_something_has_worked(self):
+        ws = windows_across_months()
+        s = SweepStore()
+        sweep_batch(ws, s, batch=3, fetch=self._all_empty_then_a_fare(),
+                    sleep=lambda _: None, delay_s=0, focus_months=[1])
+        # The first window returned a fare, proving the connection; the
+        # empties after it are therefore believed rather than re-queued.
+        trusted = [k for k, v in s.checked.items() if v.get("healthy")]
+        assert trusted, "no empty was ever trusted, so nothing can finish"
+
+    def test_the_focus_advances_instead_of_looping(self):
+        ws = windows_across_months()
+        s = SweepStore()
+        f = self._all_empty_then_a_fare()
+        seen = []
+        for _ in range(3):
+            pend = focus_pending(ws, s, [1])
+            if not pend:
+                break
+            seen.append(pend[0].key)
+            sweep_batch(ws, s, batch=1, fetch=f,
+                        sleep=lambda _: None, delay_s=0, focus_months=[1])
+        assert len(set(seen)) == len(seen), f"the focus repeated a window: {seen}"
+
+    def test_a_focus_can_reach_completion(self):
+        ws = windows_across_months()
+        s = SweepStore()
+        f = self._all_empty_then_a_fare()
+        for _ in range(20):
+            if not focus_pending(ws, s, [1]):
+                break
+            sweep_batch(ws, s, batch=1, fetch=f, sleep=lambda _: None,
+                        delay_s=0, focus_months=[1])
+        assert focus_pending(ws, s, [1]) == [], "the focus never finished"
+
+    def test_nothing_working_means_nothing_is_trusted(self):
+        """Absence of evidence is not evidence: an all-empty stretch waits."""
+        ws = windows_across_months()
+        s = SweepStore()
+        sweep_batch(ws, s, batch=3, fetch=FakeChrome(""),
+                    sleep=lambda _: None, delay_s=0, focus_months=[1])
+        assert not [k for k, v in s.checked.items() if v.get("healthy")]
+        assert s.suspect, "an unprovable empty was not queued"

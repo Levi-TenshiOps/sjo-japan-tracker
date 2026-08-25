@@ -1892,12 +1892,20 @@ class TestAThrottleIsFastAndABarrenDateIsNot:
         assert not looks_throttled(s.recent)
 
     def test_blankness_is_still_recorded_separately(self, monkeypatch):
-        """It is real information about the dates - just not about Google."""
+        """It is real information about the dates - just not about Google.
+
+        Fewer windows than RECHECK_EVERY on purpose. An all-empty stretch
+        proves nothing about the connection, so every window is queued for
+        a second look - and a re-check is excluded from the health sample,
+        which would otherwise make this count one short for a reason that
+        has nothing to do with what it is testing.
+        """
         self._clock(monkeypatch, per_window=8.0)
         s = SweepStore()
-        sweep_batch(windows(10), s, batch=10, fetch=FakeChrome(""),
+        n = sweeper.RECHECK_EVERY - 1
+        sweep_batch(windows(n), s, batch=n, fetch=FakeChrome(""),
                     sleep=lambda _: None, delay_s=0)
-        assert sum(s.recent_blank) == 10, "the barren stretch went unrecorded"
+        assert sum(s.recent_blank) == n, "the barren stretch went unrecorded"
         assert sum(s.recent) == 0, "...but it is not a throttle"
 
     def test_health_reports_both_numbers_apart(self, monkeypatch):
@@ -2129,8 +2137,11 @@ class TestTheClockTimesTheFetchNotTheQueue:
     def test_a_long_queue_before_a_slow_empty_is_still_not_a_throttle(self, monkeypatch):
         s = self._run(monkeypatch, lock_wait=240.0, fetch_secs=12.0)
         assert sum(s.recent) == 0
+        # Only the timing matters here. Whether the empty is *trusted* is a
+        # separate question, answered by `connection_proven`: in this run
+        # nothing came back with fares, so nothing is proven and the
+        # empties stay queued. That is covered in its own class.
         assert all(v["secs"] == 12.0 for v in s.checked.values())
-        assert all(v["healthy"] for v in s.checked.values())
 
     def test_no_queue_behaves_the_same(self, monkeypatch):
         s = self._run(monkeypatch, lock_wait=0.0, fetch_secs=3.0)

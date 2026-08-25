@@ -1456,6 +1456,57 @@ At ~900 launches a day, 719 windows is well under a day - against ~11 days
 had they drained at the ordinary one-in-eight re-check share, mixed in
 with October's 521.
 
+## The re-check queue could never drain, and a focus could never finish
+
+Found 2026-08-24 by asking "is the focus actually working?", and the
+answer was no - but the cause was months older and much worse than the
+new feature.
+
+`checked[key]["healthy"]` was defined as
+
+    measured and not throttled and elapsed >= SUSPECT_FAST_SECONDS
+
+and that last term makes it **unsatisfiable for an empty window**. The
+calibration earlier the same day measured it: a date with no flights
+answers in **3.6-4.6 seconds, always**. So a genuinely empty window could
+never be marked healthy, `unverified_windows` counted it unverified for
+ever, and it went straight back on the end of the re-check queue.
+
+**The proof was sitting in the logs all along.** The backlog through five
+hours of continuous sweeping:
+
+    15:07  1268     17:09  1337     19:35  1331
+    15:54  1332     17:54  1334     20:18  1335
+    16:35  1333     18:04  1332     20:29  1334
+
+It never drained. It rose as often as it fell. Every re-check spent a
+Chrome launch to put the same window back in the queue.
+
+`focus_pending` reads the same flag, so a focus inherited it whole and was
+observed live re-pricing `2027-01-03 +33n` on consecutive launches, unable
+ever to reach January's second window.
+
+**The fix is the day's recurring lesson applied one level deeper.** An
+empty page tells you nothing on its own; what tells you something is
+whether *anything nearby worked*. `connection_proven` asks exactly that,
+and `healthy` is now `measured and not throttled and proven`.
+
+Two details that matter:
+
+* **Absence of evidence is not trust.** A throttle rest clears the health
+  samples, so right afterwards nothing is proven and empties stay queued.
+  That blind spot is deliberate and is preserved - the tests for it were
+  what caught an earlier, cruder version of this fix that simply deleted
+  the timing term.
+* **`recent_worked` is recorded on every launch**, re-checks and focus
+  picks included, and it is the only sample that is. `recent` and
+  `recent_blank` exclude re-checks to stop re-check empties inflating the
+  throttle signal - but a re-check that *succeeds* inflates nothing, and
+  without counting it a focus records nothing at all, because every focus
+  pick is a re-check. That was the second bug hiding behind the first: the
+  fix looked right and changed nothing, because the evidence it needed was
+  being thrown away.
+
 ## Layout
 
 ```
