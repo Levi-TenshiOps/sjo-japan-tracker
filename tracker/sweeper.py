@@ -572,6 +572,91 @@ def _note_unresearched(store: "SweepStore", parsed) -> None:
             rec["min"] = min(int(rec.get("min", opt.price_usd)), opt.price_usd)
 
 
+def watch_lines(windows: Sequence, store: "SweepStore", *,
+                threshold: int | None, delay_s: float = 90.0,
+                started: tuple | None = None,
+                now: datetime | None = None) -> list[str]:
+    """A compact live view of the sweep, for `--watch`.
+
+    Reads the store and nothing else, so it is safe to leave running
+    beside the sweep: the two never write the same file, and this makes no
+    request to Google.
+
+    `started` is (timestamp, cursor) from when watching began, which is
+    what turns a position into a rate. The configured delay gives a
+    *theoretical* rate; the observed one is the honest number, because the
+    sweep also waits on the Google lock and rests when throttled.
+    """
+    now = now or datetime.now(timezone.utc)
+    total = len(windows) or 1
+    done = min(store.cursor, total)
+    pct = 100.0 * done / total
+    filled = int(pct / 2.5)
+    bar = "#" * filled + "." * (40 - filled)
+
+    out = [f"  [{bar}] {pct:5.1f}%",
+           f"  window {done:,} of {total:,}   "
+           f"{len(store.found):,} fares remembered   "
+           f"{len(store.suspect):,} awaiting a re-check"]
+
+    rate = None
+    if started:
+        t0, c0 = started
+        hours = (now - t0).total_seconds() / 3600.0
+        moved = done - c0
+        if hours > 0 and moved > 0:
+            rate = moved / hours
+    if rate:
+        left = max(total - done, 0)
+        eta = left / rate
+        finish = now + timedelta(hours=eta)
+        out.append(f"  {rate:.0f} new window(s)/hour observed   "
+                   f"{left:,} left   ~{eta / 24:.1f} day(s)")
+        out.append(f"  first full pass ends about "
+                   f"{finish.astimezone():%a %d %b %H:%M}")
+    else:
+        out.append(f"  {max(total - done, 0):,} window(s) left "
+                   f"(watching for a rate...)")
+
+    # Per departure month, because "have we done January yet" is the
+    # question actually being asked. "walked" is not the same as "known":
+    # a window that came back empty while the connection was in doubt is
+    # queued for a second look rather than believed.
+    queued = set(store.suspect)
+    months: dict = {}
+    for i, w in enumerate(windows):
+        key = w.depart.strftime("%Y-%m")
+        row = months.setdefault(key, {"total": 0, "walked": 0,
+                                      "fare": 0, "again": 0})
+        row["total"] += 1
+        if i < store.cursor:
+            row["walked"] += 1
+            if w.key in store.found:
+                row["fare"] += 1
+            elif w.key in queued:
+                row["again"] += 1
+    out.append("")
+    out.append(f"  {'month':9}{'walked':>14}{'with a fare':>13}{'re-check':>10}")
+    for key in sorted(months, key=lambda k: (k[5:], k)):
+        r = months[key]
+        share = 100.0 * r["walked"] / (r["total"] or 1)
+        walked = f"{r['walked']}/{r['total']} ({share:.0f}%)"
+        out.append(f"  {key:9}{walked:>14}{r['fare']:>13}{r['again']:>10}")
+
+    best = store.best(limit=1, threshold=None, now=now)
+    if best:
+        d = best[0]
+        out.append("")
+        out.append(f"  cheapest right now  ${d.price_usd:,}  "
+                   f"{d.depart} -> {d.ret}")
+    fast = store.recent[-EMPTY_ALARM_WINDOW:]
+    blank = store.recent_blank[-EMPTY_ALARM_WINDOW:]
+    out.append(f"  throttle signal {(100 * sum(fast) / len(fast)) if fast else 0:.0f}%"
+               f"   no visa-free fare {(100 * sum(blank) / len(blank)) if blank else 0:.0f}%"
+               f"   throttle events {store.throttle_events}")
+    return out
+
+
 def readiness_report(store: "SweepStore", *, throttle_state, hours_since_email,
                      quiet_hours: float = READY_QUIET_HOURS,
                      now: datetime | None = None) -> tuple[bool, list[str]]:

@@ -8,9 +8,13 @@ order, forever, and writing what it finds to `discoveries.json`, which the
 scheduled run folds into the email.
 
     python sweep_forever.py                 # run until stopped
-    python sweep_forever.py --delay 12      # gentler on the IP
+    python sweep_forever.py --watch         # live progress, leave it running
     python sweep_forever.py --status        # what has it found so far?
+    python sweep_forever.py --readiness     # safe to raise the rate yet?
     python sweep_forever.py --once          # a single batch, then exit
+
+`--watch`, `--status`, `--readiness` and `--coverage` only read. They are
+safe to run beside the sweep and none of them touches Google.
 
 Leave it running in its own terminal, or install it as a service. It is
 safe to stop at any time: the cursor is saved after every batch, so it
@@ -36,6 +40,7 @@ import signal
 import sys
 import time
 from datetime import date as Date
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -49,7 +54,7 @@ from tracker.schedule import generate_windows     # noqa: E402
 from tracker.sweeper import (                     # noqa: E402
     DEFAULT_STORE, RECHECK_EVERY, Discovery, SweepStore, coverage_report,
     queue_unverified, readiness_report, sweep_batch, sweep_order,
-    unverified_windows,
+    unverified_windows, watch_lines,
 )
 
 log = logging.getLogger("sweep")
@@ -148,6 +153,11 @@ def build_args() -> argparse.Namespace:
     p.add_argument("--coverage", action="store_true",
                    help="how often each kind of window is revisited, and what "
                         "length of price drop that catches")
+    p.add_argument("--watch", nargs="?", type=float, const=30.0,
+                   default=None, metavar="SECONDS",
+                   help="live progress, refreshing every SECONDS (default "
+                        "30). Reads files only - safe to leave running "
+                        "beside the sweep. Ctrl-C to stop.")
     p.add_argument("--readiness", action="store_true",
                    help="is it safe yet to raise the sweep rate or the "
                         "Chrome budget? reads files only, never Google")
@@ -172,7 +182,8 @@ def main() -> int:
     # health was unreadable for exactly this reason, while sweep.log still
     # held a previous run's output and looked current. Append, with the date
     # in the file's format, so one file covers the whole history.
-    if args.log and not (args.status or args.readiness or args.coverage):
+    if args.log and not (args.status or args.readiness or args.coverage
+                         or args.watch is not None):
         try:
             fh = logging.FileHandler(args.log, encoding="utf-8")
             fh.setFormatter(logging.Formatter(
@@ -204,7 +215,8 @@ def main() -> int:
     # backwards. `--coverage` was missed when `--status` and `--readiness`
     # were excluded, so asking how complete the sweep was could perturb the
     # thing being asked about.
-    read_only = args.status or args.readiness or args.coverage
+    read_only = (args.status or args.readiness or args.coverage
+                 or args.watch is not None)
     if not read_only:
         dropped = store.prune()
         if dropped:
@@ -242,6 +254,35 @@ def main() -> int:
               "window, save, release the Google lock and exit - usually "
               "within a couple of minutes.")
         print("It is safe to start a new one after that; the cursor resumes.")
+        return 0
+
+    if args.watch is not None:
+        every = max(float(args.watch), 5.0)
+        started = None
+        try:
+            while True:
+                snap = SweepStore.load(args.store)
+                if started is None:
+                    started = (datetime.now(timezone.utc), snap.cursor)
+                lines = watch_lines(windows, snap,
+                                    threshold=prefs.good_price_usd,
+                                    delay_s=args.delay, started=started)
+                # Home the cursor and clear so the block refreshes in
+                # place. Harmless where it is ignored: the block just
+                # repeats instead.
+                sys.stdout.write('\x1b[H\x1b[J')
+                clock = datetime.now(timezone.utc).astimezone()
+                print(f"  SJO -> Japan sweep   {clock:%H:%M:%S}"
+                      f"   (refreshing every {every:.0f}s, "
+                      f"Ctrl-C to stop)")
+                print()
+                for line in lines:
+                    print(line)
+                sys.stdout.flush()
+                time.sleep(every)
+        except KeyboardInterrupt:
+            print()
+            print("Stopped watching. The sweep itself is unaffected.")
         return 0
 
     if args.readiness:

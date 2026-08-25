@@ -146,17 +146,25 @@ class TestReportingCommandsNeverWriteTheStore:
     """
 
     def _guard(self) -> str:
+        """Source with runs of whitespace collapsed.
+
+        The guard is a wrapped expression, so an exact-string assertion
+        breaks the moment a line is rewrapped rather than when the guard
+        is actually lost.
+        """
         import pathlib
+        import re
         root = pathlib.Path(__file__).resolve().parent.parent
-        return (root / "sweep_forever.py").read_text(encoding="utf-8")
+        src = (root / "sweep_forever.py").read_text(encoding="utf-8")
+        return re.sub(r"\s+", " ", src)
 
     def test_coverage_is_treated_as_read_only(self):
         src = self._guard()
-        assert "read_only = args.status or args.readiness or args.coverage" in src
+        assert "read_only = (args.status or args.readiness or args.coverage" in src
 
     def test_the_startup_prune_is_behind_that_guard(self):
         src = self._guard()
-        i = src.find("read_only = args.status")
+        i = src.find("read_only = (args.status")
         j = src.find("store.prune()", i)
         assert i > 0 and j > i, "prune no longer follows the read_only guard"
         assert "if not read_only:" in src[i:j]
@@ -164,3 +172,59 @@ class TestReportingCommandsNeverWriteTheStore:
     def test_forgetting_health_is_behind_it_too(self):
         src = self._guard()
         assert "if not read_only and store.forget_stale_health():" in src
+
+
+class TestTheWatchView:
+    """`--watch` is left running beside the sweep, so it must not write."""
+
+    def _windows(self, n=10):
+        from datetime import date, timedelta
+        from tracker.schedule import Window
+        base = date(2027, 1, 4)
+        return [Window(base + timedelta(days=i),
+                       base + timedelta(days=i + 27)) for i in range(n)]
+
+    def test_it_reports_progress_and_months(self):
+        from tracker.sweeper import watch_lines
+        ws = self._windows()
+        s = healthy_store()
+        s.cursor = 4
+        text = "\n".join(watch_lines(ws, s, threshold=1400))
+        assert "%" in text
+        assert "2027-01" in text, "the per-month breakdown is missing"
+        assert "4/10" in text or "4 of 10" in text or "window 4" in text
+
+    def test_a_rate_appears_once_the_cursor_moves(self):
+        from datetime import timedelta
+        from tracker.sweeper import watch_lines
+        ws = self._windows(100)
+        s = healthy_store()
+        s.cursor = 30
+        start = (datetime.now(timezone.utc) - timedelta(hours=2), 10)
+        text = "\n".join(watch_lines(ws, s, threshold=1400, started=start))
+        assert "window(s)/hour observed" in text
+        assert "first full pass ends about" in text
+
+    def test_no_rate_is_claimed_before_the_cursor_moves(self):
+        from tracker.sweeper import watch_lines
+        ws = self._windows(100)
+        s = healthy_store()
+        s.cursor = 10
+        start = (datetime.now(timezone.utc), 10)
+        text = "\n".join(watch_lines(ws, s, threshold=1400, started=start))
+        assert "watching for a rate" in text
+
+    def test_an_empty_window_list_does_not_divide_by_zero(self):
+        from tracker.sweeper import watch_lines
+        assert watch_lines([], healthy_store(), threshold=1400)
+
+    def test_watch_is_treated_as_read_only(self):
+        import pathlib
+        import re
+        root = pathlib.Path(__file__).resolve().parent.parent
+        src = re.sub(r"\s+", " ",
+                     (root / "sweep_forever.py").read_text(encoding="utf-8"))
+        i = src.find("read_only = (args.status")
+        assert i > 0, "the read_only guard is gone"
+        assert "args.watch is not None" in src[i:i + 200], (
+            "--watch would write the store it is watching")
