@@ -1591,6 +1591,65 @@ The cheap cut-off tightens by $373 and starts meaning something: $1,347 to
 $1,840 is the band a fare has to enter, rather than anything under a
 number two thirds of the market already beats.
 
+## Three suggested "fixes", all three declined, 2026-08-25
+
+Offered from outside the project. Recording them because each is a
+plausible-sounding generalisation that this route's own data contradicts,
+and the next person will be offered the same three.
+
+**"Drop the alert threshold to $1,200 - $1,380 is above the ~$1,353 route
+average."** The premise is a misreading. Across 2,826 Chrome observations
+the mean is **$2,536** and the median $2,464; $1,353 is within $6 of the
+*cheapest fare ever recorded*, not the average. At $1,200 the alert would
+have fired **zero** times in three days of sweeping. The live threshold is
+$1,400 (the $1,380 is an unused dataclass default) and catches 91 fares,
+3.2% - the top of the distribution, which is what it is for.
+
+**"Add HND, you're tracking NRT only."** `chrome_destination` is the metro
+code **TYO**, which is HND *and* NRT in one request, and Haneda fares do
+reach the email - "HND 2027-01-29 -> CHEAP" is in the log. Only the wide
+net is NRT-only, and that is measured rather than careless: Google returns
+no month recommendation at all for HND.
+
+**"Weight Thursdays - ARC has Thursday as the cheapest departure day."**
+Industry-wide averages say nothing about a route whose cheap fares all
+ride one carrier's weekly Zurich rotation. On 2,830 observations here:
+
+    day  priced  cheapest  median   <=$1,600   ZRH routings
+    Thu     214    $1,706  $2,842          0              0
+    Fri     884    $1,347  $2,099        179            197
+
+**Thursday is the worst day on this route and Friday is the best** - by a
+distance, and 179 of the 254 sub-$1,600 fares depart on a Friday. The
+suggestion flagged a Friday departure as a problem to fix.
+
+It would also have undone a deliberate design: `promising_weekday_pairs`
+*derives* the good days from the store precisely so a hardcoded prior
+cannot outlive the schedule that justified it.
+
+**The pattern in all three: a number that is true somewhere else.** The
+rule this file has learned twice already - never conclude anything about
+dates that were not queried - has a mirror image, which is never import a
+conclusion drawn from dates somebody else queried.
+
+### What the review did turn up: the standout tier cannot fire
+
+`great_price_usd` is **$1,150**, and **0 of 2,833** observations reach it.
+The cheapest fare ever seen is $1,347.
+
+That is the same defect as the price bar's unreachable green zone, and the
+same one that removed GOOGLE as a band source: **a band the data cannot
+reach is a broken gauge.** `TestTheCheapBandMustBeReachable` already pins
+that principle for the *cheap* cut-off; nothing pins it for this one.
+
+The cost is not cosmetic. `is_great` is what releases the held second
+email early, so a genuine record-breaking fare cannot interrupt the
+evening reservation - the one case the interruption exists for.
+
+At $1,347 it would catch 35 fares (1.24%): rare, and possible. Left for
+the trip owner to set, because how eager the alerts are is theirs to
+choose, not a defect to fix unilaterally.
+
 ## Layout
 
 ```
@@ -1836,9 +1895,25 @@ carries no routing, so it is a *candidate*: it goes to the front of the hot
 list and the ordinary search prices it, with `itinerary.validate()` still
 ruling on the visa. Use the grid to track a fare; use the net to find one.
 
-**SJO-OSA returns nothing, at any stop count.** Not a `max_stops` artefact:
-1, 2, 3 and unlimited stops all return zero on every date tried, while TYO
-returns 12-14 on the same dates. The probation machinery in `schedule.py`
+**SJO-OSA returns nothing *bookable*, and the reason matters.** Re-tested
+through Chrome on 2026-08-25 against a date whose Tokyo answer is known:
+
+    OSA   8 options,  8 visa-rejected,  0 usable
+    KIX   7 options,  7 visa-rejected,  0 usable
+    TYO  13 options,  9 visa-rejected,  $1,347 usable
+
+So Google does answer for Osaka - the earlier note here said "returns
+nothing at any stop count", which was measured on the HTTP path and is not
+quite right. Every Osaka routing it offers goes through the United States
+or Canada, which this passport cannot transit. The cheap European
+Lufthansa-group routings that make Tokyo affordable from San Jose do not
+serve Osaka.
+
+The practical consequence is the same - do not add KIX or OSA to
+`chrome_destination`, because it would spend the scarcest budget in the
+project to collect zero usable fares - but the reason is different, and
+worth keeping: if the visa position ever changed, Osaka opens up
+immediately. It is not an absent route, it is a filtered one. The probation machinery in `schedule.py`
 demotes it automatically after `DEST_PROBATION_AFTER` fruitless searches and
 re-probes every `DEST_PROBE_EVERY` runs, which is the right shape: cheap to
 keep watching in case a route opens, free the rest of the time.
