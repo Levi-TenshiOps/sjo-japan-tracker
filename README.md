@@ -205,6 +205,25 @@ What actually gets you blocked, in order:
 **Never diagnose a block by making more requests.** That turned a short
 throttle into an hour-long one. When it looks blocked, stop and wait.
 
+## When something breaks
+
+Four failures, all of which email you:
+
+| What happened | How you find out |
+|---|---|
+| Google throttles the sweep | email, and it backs off on its own |
+| Google goes dark on a scheduled run | email, when *both* search methods return nothing |
+| The sweep stops | email from the next scheduled run |
+| Results become unreadable | email — Google's markup has changed |
+| Your emails stop arriving | email from the sweep's watchdog |
+
+The two halves watch each other: the sweep reports the scheduled runs
+falling silent, and the scheduled runs report the sweep dying. Neither can
+announce its own death.
+
+Alerts are sent once, not once per run, and clear themselves when the
+condition does.
+
 ## Files
 
 | File | Committed | Contains |
@@ -221,7 +240,12 @@ throttle into an hour-long one. When it looks blocked, stop and wait.
 ## Honest caveats
 
 - **Unofficial endpoint.** There is no public Google Flights API; this
-  reads the page. It works well but can break without warning.
+  reads the page. Two different things can go wrong, and only one of them
+  is Google blocking you. A block is loud and temporary. A **markup
+  change** is silent and permanent — the pages still arrive, some rows
+  become unreadable, and those fares simply stop existing as far as the
+  tracker is concerned, which looks exactly like a quiet market. Both now
+  email you (see below).
 - **An empty answer proves nothing.** It means this method saw nothing, not
   that no fare exists. A limit was once inferred from silence and it
   silently excluded the exact flight being tracked.

@@ -282,6 +282,45 @@ def _recently_swept(cfg) -> set[str]:
         return set()
 
 
+# Result rows the parser could not read. Normally zero; anything material
+# means Google's markup has moved and fares are being dropped unread.
+PARSER_ALARM_ROWS = 25
+
+
+def _watch_the_sweep(cfg, prefs, throttle_state, *, store, idle) -> None:
+    """Email when the sweep stops, or when results stop being readable.
+
+    The scheduled runs are the only thing that can report either. The sweep
+    cannot announce its own death, and a parser that has stopped
+    understanding the page produces no error at all - just fewer fares,
+    which is indistinguishable from a quiet market.
+
+    Both are once-only and clear themselves, so six runs a day cannot send
+    six copies.
+    """
+    alarm_cfg = alarm_mod.AlarmConfig.from_config(cfg, prefs)
+    stopped = idle is not None and idle > SWEEP_IDLE_HOURS
+    if stopped and not throttle_state.sweep_idle_alarm_sent:
+        log.warning("Emailing: the background sweep has stopped")
+        _send_alarm(alarm_mod.sweep_stopped_email(
+            hours=idle, cursor=store.progress(0).split(",")[0],
+            pending=len(store.suspect)), alarm_cfg)
+        throttle_state.sweep_idle_alarm_sent = True
+        throttle_state.save(cfg.throttle_file)
+    elif not stopped and throttle_state.sweep_idle_alarm_sent:
+        log.info("The background sweep is running again")
+        throttle_state.sweep_idle_alarm_sent = False
+        throttle_state.save(cfg.throttle_file)
+
+    missed = int(getattr(store, "rows_missed_by_parser", 0) or 0)
+    if missed >= PARSER_ALARM_ROWS and not throttle_state.parser_alarm_sent:
+        log.warning("Emailing: %d result row(s) could not be parsed", missed)
+        _send_alarm(alarm_mod.parser_broken_email(
+            missed=missed, windows=store.windows_priced), alarm_cfg)
+        throttle_state.parser_alarm_sent = True
+        throttle_state.save(cfg.throttle_file)
+
+
 def _send_alarm(content, alarm_cfg) -> None:
     """Best effort. A failed alarm must never cost the trip owner an email."""
     if not alarm_cfg.usable:
@@ -382,8 +421,9 @@ def run(argv: list[str] | None = None) -> int:
                         "%.1f h. It does not restart itself - check whether "
                         "it is still running: python sweep_forever.py --status",
                         idle)
-    except Exception:                       # noqa: BLE001
-        pass
+        _watch_the_sweep(cfg, prefs, throttle_state, store=_store, idle=idle)
+    except Exception as exc:                # noqa: BLE001
+        log.debug("sweep watchdog failed (%s); continuing", exc)
 
     rows = [] if args.no_history else _read_rows(cfg.history_csv)
     hot = schedule.hot_keys_from_history(rows, limit=cfg.hot_list_size)

@@ -125,6 +125,68 @@ def recovered_email(*, minutes: float, suspect: int,
         ])
 
 
+def sweep_stopped_email(*, hours: float, cursor: str,
+                        pending: int) -> EmailContent:
+    """The background sweep has stopped pricing windows.
+
+    It is ~80% of everything this project collects and **it does not
+    restart itself**. A scheduled run has always noticed - it reads the
+    store's `last_active` - but until 2026-08-25 it only wrote a line to
+    `tracker.log`, which is the one place nobody looks. The trip owner
+    asked the right question: is there an email if the sweeper stops?
+    There was not.
+    """
+    return _plain(
+        "⚠ The background flight sweep has stopped",
+        [
+            f"It has not priced a window in {hours:.1f} hours.",
+            "",
+            "This is the part that walks every date, so while it is down "
+            "you are only getting the handful of windows the scheduled "
+            "runs check - a few dozen a day instead of a few hundred. "
+            "Your emails will keep arriving and will still be correct; "
+            "they will just stop finding anything new.",
+            "",
+            f"It stopped at {cursor}, with {pending:,} window(s) still "
+            "waiting on an answer. Nothing is lost - it resumes exactly "
+            "where it left off.",
+            "",
+            "To restart it:",
+            "    python sweep_forever.py",
+            "",
+            "It does not restart itself, and a reboot only revives it if "
+            "the Startup launcher is installed.",
+        ])
+
+
+def parser_broken_email(*, missed: int, windows: int) -> EmailContent:
+    """Google's markup changed and fares are being dropped unread.
+
+    This is the failure the README calls "can break without warning", and
+    it is far nastier than a block. A block is loud and temporary; this is
+    silent and permanent - the pages arrive, the parser cannot read some
+    rows, and those fares simply never exist as far as the tracker is
+    concerned. It looks exactly like a quiet market.
+    """
+    return _plain(
+        "⚠ Flight results are arriving in a format we cannot read",
+        [
+            f"{missed:,} result row(s) across {windows:,} window(s) could "
+            "not be parsed.",
+            "",
+            "That number is normally zero. It climbing means Google has "
+            "changed the layout of its results page, so real fares are "
+            "being dropped without being read - including, possibly, cheap "
+            "ones.",
+            "",
+            "This is not a block. The pages are arriving; we just cannot "
+            "understand part of them. Waiting will not fix it.",
+            "",
+            "What it needs is a look at the parser in tracker/browser.py "
+            "against a freshly captured page.",
+        ])
+
+
 def run_blocked_email(*, chrome_blank: int, chrome_attempts: int,
                       grid_rate: float, when: str) -> EmailContent:
     """A scheduled run whose every channel came back empty.

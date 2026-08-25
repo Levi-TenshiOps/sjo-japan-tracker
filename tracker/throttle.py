@@ -52,6 +52,11 @@ class ThrottleState:
     # has to survive between runs: six runs a day would otherwise send six
     # identical warnings about one throttle.
     blocked_alarm_sent: bool = False
+    # Told the trip owner the sweep has stopped / the parser is failing.
+    # Persisted so six scheduled runs a day do not send six copies, and
+    # cleared when the condition clears.
+    sweep_idle_alarm_sent: bool = False
+    parser_alarm_sent: bool = False
 
     @classmethod
     def load(cls, path: str | Path) -> "ThrottleState":

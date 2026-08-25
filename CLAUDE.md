@@ -1727,6 +1727,40 @@ has flights for a date at all, at least one of them is visa-free. The
 heavy visa rejection shows up *within* a window - 9 of 13 options on a
 typical one - not as whole windows lost to it.
 
+## Two silent failures nobody would have been told about
+
+Asked on 2026-08-25, reading the README's "can break without warning":
+does that mean a block, and is there an email if the sweep stops?
+
+Good question, and the answer was no on both counts.
+
+**The sweep dying was a log line.** A scheduled run has always noticed - it
+reads the store's `last_active` and warns past `SWEEP_IDLE_HOURS` - but it
+only wrote to `tracker.log`, which is the one place nobody looks. The sweep
+is ~80% of everything collected and **it does not restart itself**, so the
+failure mode was: emails keep arriving, look completely normal, and quietly
+stop containing anything new.
+
+The sweep cannot report this itself, which is the whole point. Its own
+silence watchdog only runs while it is alive.
+
+**A markup change had no alarm at all**, and it is the nastier of the two.
+A block is loud and temporary; this is silent and permanent - the pages
+arrive, `parse_options` cannot read some rows, and those fares stop
+existing as far as the tracker is concerned. `rows_missed_by_parser` has
+counted it since 2026-08-24 and was only ever shown in `--status`. It
+alarms past `PARSER_ALARM_ROWS` (25) now, with an email that says plainly
+that this is not a block and waiting will not fix it.
+
+Both live in `_watch_the_sweep`, called from the scheduled runs, guarded so
+the watchdog can never cost the email it sits beside. Both are once-only
+via `throttle.json` and clear themselves.
+
+**The pattern: the two halves of this system can only be watched by each
+other.** The sweep reports the scheduled runs falling silent; the scheduled
+runs report the sweep dying and the parser going blind. Anything that can
+only be detected by the component it kills needs the other one to say it.
+
 ## Layout
 
 ```
