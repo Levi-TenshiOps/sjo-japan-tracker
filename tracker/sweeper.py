@@ -854,8 +854,8 @@ def unverified_windows(windows: Sequence, store: "SweepStore") -> list[str]:
     for w in windows[:min(store.cursor, len(windows))]:
         if w.key in store.found:
             continue                       # it produced a fare; nothing to do
-        rec = store.checked.get(w.key)
-        if rec is None or not rec.get("healthy"):
+        rec = _checked_rec(store, w.key)
+        if not rec or not rec.get("healthy"):
             out.append(w.key)
     return out
 
@@ -899,6 +899,27 @@ def promising_weekday_pairs(store: "SweepStore", *, threshold: int | None,
 # built on, and letting it go stale to finish a backfill sooner is a bad
 # trade at any speed.
 FOCUS_HOT_EVERY = 5
+
+
+def _checked_rec(store: "SweepStore", key: str) -> dict:
+    """The ledger entry for a window, or {} if it is not usable.
+
+    The store is JSON on disk, written by a process that can be killed and
+    occasionally edited by hand. `checked[key]` being a string rather than
+    an object is exactly the "valid JSON is not the object this expects"
+    shape that killed every scheduled run for four hours on 2026-08-23.
+    Readers guard; writers cannot.
+    """
+    rec = store.checked.get(key)
+    return rec if isinstance(rec, dict) else {}
+
+
+def _tries(store: "SweepStore", key: str) -> int:
+    """How many times a focus has priced this window, defensively."""
+    try:
+        return int(store.focus_tries.get(key, 0) or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def connection_proven(store: "SweepStore", window: int | None = None) -> bool:
@@ -960,7 +981,7 @@ def focus_next(pending: Sequence, store: "SweepStore", *,
         return None
     now = now or datetime.now(timezone.utc)
     for w in pending:
-        at = (store.checked.get(w.key) or {}).get("at") or ""
+        at = _checked_rec(store, w.key).get("at") or ""
         if not at:
             return w                      # never checked - take it
         try:
@@ -975,7 +996,7 @@ def focus_next(pending: Sequence, store: "SweepStore", *,
     # done and lapping a small set. Take the least recently checked rather
     # than stalling.
     return min(pending,
-               key=lambda w: (store.checked.get(w.key) or {}).get("at") or "")
+               key=lambda w: _checked_rec(store, w.key).get("at") or "")
 
 
 def focus_pending(windows: Sequence, store: "SweepStore",
@@ -1000,12 +1021,12 @@ def focus_pending(windows: Sequence, store: "SweepStore",
             continue
         if w.key in store.found:
             continue
-        if store.checked.get(w.key, {}).get("healthy"):
+        if _checked_rec(store, w.key).get("healthy"):
             continue
         # Given a fair number of attempts already. It stays in the ordinary
         # re-check queue - nothing is written off - but the focus stops
         # waiting on it, so the focus can actually end.
-        if int(store.focus_tries.get(w.key, 0)) >= max_tries:
+        if _tries(store, w.key) >= max_tries:
             continue
         out.append((i, w.depart, w.back, w))
     out.sort(key=lambda t: (t[0], t[1], t[2]))
@@ -1382,7 +1403,7 @@ def sweep_batch(
             w = focus_next(pending, store)
             if w is None:
                 w = pending[0]
-            store.focus_tries[w.key] = int(store.focus_tries.get(w.key, 0)) + 1
+            store.focus_tries[w.key] = _tries(store, w.key) + 1
             if w.key in store.suspect:
                 store.suspect.remove(w.key)
             replay = True               # freezes the cold cursor

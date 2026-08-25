@@ -600,3 +600,143 @@ class TestAFocusIsASessionNotAStandingCondition:
                      (pathlib.Path(__file__).resolve().parent.parent
                       / "sweep_forever.py").read_text(encoding="utf-8"))
         assert "store.focus_tries = {} store.focus_done_logged = False" in src
+
+
+class TestWindowKeysMustBeUnique:
+    """`resume_index` finds the *first* window matching `last_key`.
+
+    So a duplicate key makes the cold cursor jump backwards and the sweep
+    oscillates between two positions for ever, priced windows climbing
+    while coverage stands still. Found 2026-08-24 in a simulation whose
+    own fixture had duplicates - not a live bug, because generate_windows
+    does not produce them, but nothing was asserting that.
+    """
+
+    def test_the_real_window_list_has_no_duplicates(self):
+        from tracker.preferences import Preferences
+        from tracker.schedule import generate_windows
+        ws = generate_windows(Preferences.load("preferences.example.json"))
+        keys = [w.key for w in ws]
+        assert len(set(keys)) == len(keys), "generate_windows made a duplicate"
+
+    def test_a_duplicate_key_would_stall_the_cursor(self):
+        """Documents the failure mode, so the guard above has a reason."""
+        from tracker.sweeper import resume_index
+        a = Window(date(2027, 1, 4), date(2027, 1, 25))
+        ws = [a, Window(date(2027, 1, 5), date(2027, 1, 26)), a]
+        s = SweepStore()
+        s.last_key = a.key
+        assert resume_index(ws, s) == 1, "resume_index no longer takes the first"
+
+
+class TestTheMonthOrderHoldsEndToEnd:
+    """January must *finish* before February starts, not merely lead it."""
+
+    def _months(self, seed):
+        import calendar
+        import random
+        random.seed(seed)
+        ws = []
+        for y, m in ((2027, 1), (2027, 2), (2026, 11)):
+            for d in range(1, calendar.monthrange(y, m)[1] + 1):
+                base = date(y, m, d)
+                ws.append(Window(base, base + timedelta(days=21)))
+        dom = _io.open(FIXTURE, encoding="utf-8").read()
+        s = SweepStore()
+        order = []
+
+        def fetch(url):
+            return "" if random.random() < 0.4 else dom
+
+        for _ in range(300):
+            if s.focus_done_logged:
+                break
+            before = set(s.checked)
+            sweep_batch(ws, s, batch=1, fetch=fetch, sleep=lambda _: None,
+                        delay_s=0, focus_months=[1, 2], hot_threshold=1400)
+            order += [k[:7] for k in set(s.checked) - before]
+        return order
+
+    def test_january_finishes_before_february_begins(self):
+        for seed in (1, 2, 3):
+            order = self._months(seed)
+            last_jan = max((i for i, m in enumerate(order) if m == "2027-01"),
+                           default=-1)
+            first_feb = min((i for i, m in enumerate(order) if m == "2027-02"),
+                            default=10 ** 9)
+            assert last_jan < first_feb, f"seed {seed}: months interleaved"
+
+    def test_months_outside_the_focus_are_untouched_while_it_runs(self):
+        order = self._months(1)
+        assert "2026-11" not in order, "the focus leaked into November"
+
+
+class TestTheFocusNeverCrashesOnAStoreItOnlyReads:
+    """The recurring rule: never crash on a file you only read.
+
+    `discoveries.json` is JSON written by a process that can be killed and
+    is occasionally edited by hand. "Valid JSON that is not the object
+    this expects" is the exact shape that killed every scheduled run for
+    four hours on 2026-08-23, and both of these readers had it.
+    """
+
+    def _windows(self, n=6):
+        return [Window(date(2027, 1, 1) + timedelta(days=i),
+                       date(2027, 1, 1) + timedelta(days=i + 21))
+                for i in range(n)]
+
+    def test_junk_in_focus_tries(self):
+        ws = self._windows()
+        s = SweepStore()
+        s.focus_tries = {ws[0].key: "three", ws[1].key: None,
+                         ws[2].key: -5, ws[3].key: [1, 2], ws[4].key: {}}
+        assert len(focus_pending(ws, s, [1])) == len(ws)
+
+    def test_junk_in_the_checked_ledger(self):
+        from tracker.sweeper import focus_next
+        ws = self._windows()
+        s = SweepStore()
+        s.checked = {ws[0].key: "not a dict", ws[1].key: None,
+                     ws[2].key: 0, ws[3].key: [], ws[4].key: {}}
+        pend = focus_pending(ws, s, [1])
+        assert len(pend) == len(ws)
+        assert focus_next(pend, s) is not None
+
+    def test_unverified_windows_survives_it_too(self):
+        """The older reader with the same shape."""
+        from tracker.sweeper import unverified_windows
+        ws = self._windows()
+        s = SweepStore()
+        s.cursor = len(ws)
+        s.checked = {ws[0].key: "not a dict", ws[1].key: None}
+        assert len(unverified_windows(ws, s)) == len(ws)
+
+    def test_a_store_written_before_focus_existed_still_loads(self):
+        import json
+        import os
+        import tempfile
+        from tracker.sweeper import STORE_VERSION
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump({"version": STORE_VERSION, "cursor": 3,
+                           "found": {}, "suspect": []}, fh)
+            s = SweepStore.load(path)
+            assert s.focus_tries == {} and s.focus_done_logged is False
+            assert s.recent_worked == []
+            sweep_batch(self._windows(), s, batch=1, fetch=lambda u: "",
+                        sleep=lambda _: None, delay_s=0, focus_months=[1])
+        finally:
+            os.unlink(path)
+
+    def test_a_focus_on_all_twelve_months_is_fine(self):
+        ws = self._windows()
+        assert len(focus_pending(ws, SweepStore(), list(range(1, 13)))) == len(ws)
+
+    def test_a_focus_where_everything_is_already_found(self):
+        ws = self._windows()
+        s = SweepStore()
+        for w in ws:
+            s.found[w.key] = {"price_usd": 1000}
+        assert focus_pending(ws, s, [1]) == []
