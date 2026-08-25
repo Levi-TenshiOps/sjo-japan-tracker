@@ -1340,8 +1340,24 @@ def sweep_batch(
         # leave those windows in none of the four coverage states, silently
         # written off, which is the one outcome this store exists to
         # prevent.
+        # A focus is a *session*, not a standing condition. Once it has
+        # finished it stays finished for the life of this process, and the
+        # ordinary rotation owns the sweep again.
+        #
+        # Without that, the two tiers oscillate: the cold rotation
+        # eventually wraps back into the focus months, prices a window,
+        # gets a blank it cannot yet trust - and the window re-enters
+        # `focus_pending` on the spot, freezing the cursor again for
+        # another few launches. Measured 2026-08-24: a batch of two after
+        # completion advanced the cursor by one. Bounded by FOCUS_MAX_TRIES
+        # rather than infinite, but it stalls the rotation in exactly the
+        # months the focus has already finished, and re-logs "complete"
+        # every time round.
+        #
+        # Restarting the sweep is how a focus is asked for again, and the
+        # startup path clears both this flag and the attempt counters.
         pending = (focus_pending(windows, store, focus_months)
-                   if focus_months else [])
+                   if focus_months and not store.focus_done_logged else [])
         if focus_months and not pending and not store.focus_done_logged:
             log.info("Focus on month(s) %s complete: every window has a fare "
                      "or a trusted answer. Resuming the full rotation.",
@@ -1363,7 +1379,6 @@ def sweep_batch(
         focus_turn = (pending and healthy
                       and not (freshness_turn and hot_now))
         if focus_turn:
-            store.focus_done_logged = False
             w = focus_next(pending, store)
             if w is None:
                 w = pending[0]

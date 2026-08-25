@@ -449,10 +449,11 @@ def main() -> int:
             # moment a focus finishes would let it immediately restart and
             # loop for ever, and restarting the sweep is how a focus gets
             # asked for again anyway.
-            if store.focus_tries:
+            if store.focus_tries or store.focus_done_logged:
                 log.info("FOCUS: clearing %d attempt counter(s) from a "
                          "previous focus.", len(store.focus_tries))
                 store.focus_tries = {}
+                store.focus_done_logged = False
                 store.save(args.store)
             pend = focus_pending(windows, store, focus_months)
             log.info("FOCUS: finishing %s before the rest - %d window(s) "

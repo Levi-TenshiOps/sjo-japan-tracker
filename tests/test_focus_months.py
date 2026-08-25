@@ -535,3 +535,68 @@ class TestTheCursorIsGenuinelyFrozen:
                         focus_months=[1], hot_threshold=1400)
         assert s.found[ws[0].key]["seen_at"] != before, (
             "the cheapest known fare was never refreshed")
+
+
+class TestAFocusIsASessionNotAStandingCondition:
+    """Once finished, the ordinary rotation owns the sweep again.
+
+    Otherwise the two tiers oscillate. The cold rotation eventually wraps
+    back into the focus months, prices a window, gets a blank it cannot yet
+    trust - and that window re-enters `focus_pending` on the spot, freezing
+    the cursor for another few launches and re-logging "complete" each time
+    round. Measured 2026-08-24: a batch of two after completion advanced
+    the cursor by one.
+    """
+
+    def _answered(self, n=10):
+        ws = [Window(date(2027, 1, 1) + timedelta(days=i),
+                     date(2027, 1, 1) + timedelta(days=i + 21))
+              for i in range(n)]
+        s = SweepStore()
+        s.cursor, s.last_key = 5, ws[4].key
+        for w in ws:
+            s.checked[w.key] = {"healthy": True}
+        return ws, s
+
+    def test_the_rotation_runs_freely_after_completion(self):
+        ws, s = self._answered()
+        sweep_batch(ws, s, batch=2, fetch=lambda u: "", sleep=lambda _: None,
+                    delay_s=0, focus_months=[1])
+        assert s.cursor == 7, f"the focus grabbed the cursor back ({s.cursor})"
+
+    def test_a_blank_result_does_not_restart_a_finished_focus(self):
+        # Enough windows that the cursor does not wrap, or the arithmetic
+        # below measures the wrap rather than the stall.
+        ws, s = self._answered(n=30)
+        for _ in range(6):
+            sweep_batch(ws, s, batch=1, fetch=lambda u: "",
+                        sleep=lambda _: None, delay_s=0, focus_months=[1])
+        assert s.focus_done_logged is True
+        assert s.cursor == 5 + 6, f"cursor stalled at {s.cursor}"
+
+    def test_completion_is_announced_once(self, caplog):
+        import logging
+        ws, s = self._answered()
+        with caplog.at_level(logging.INFO):
+            for _ in range(6):
+                sweep_batch(ws, s, batch=1, fetch=lambda u: "",
+                            sleep=lambda _: None, delay_s=0, focus_months=[1])
+        assert caplog.text.count("complete") <= 1, "completion was re-announced"
+
+    def test_a_restart_revives_it(self):
+        """Clearing both flags is what a startup does."""
+        ws, s = self._answered()
+        sweep_batch(ws, s, batch=1, fetch=lambda u: "", sleep=lambda _: None,
+                    delay_s=0, focus_months=[1])
+        assert s.focus_done_logged is True
+        s.focus_tries, s.focus_done_logged = {}, False
+        # The window the rotation just blanked is an open question again.
+        assert focus_pending(ws, s, [1]), "a restart did not revive the focus"
+
+    def test_the_startup_path_clears_both(self):
+        import pathlib
+        import re
+        src = re.sub(r"\s+", " ",
+                     (pathlib.Path(__file__).resolve().parent.parent
+                      / "sweep_forever.py").read_text(encoding="utf-8"))
+        assert "store.focus_tries = {} store.focus_done_logged = False" in src
