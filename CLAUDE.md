@@ -535,11 +535,21 @@ interleaved with windows answering in full. Across 110 checks the two
 populations do not overlap at all: pages with fares 9.0-26.8s, pages
 without 3.6-4.6s.
 
-So the premise this detector was rebuilt on - *"a date Google genuinely
-has no flights for still costs it the time to say so"* - is false on this
-machine. **An empty page is always fast.** A fast-empty rate therefore
-measures the calendar, exactly like the plain-empty rate it replaced. The
-costume changed; the mistake did not.
+That reading was **half right, and re-measured 2026-08-25 it is the half
+that misleads.** With `blank` recorded properly, across 179 timed checks:
+
+    pages WITH fares    min 4.7s   median 14.4s   max 26.9s
+    BLANK pages         p10 4.0s   median 24.8s   p90 25.9s
+
+Blank pages are **bimodal**: about 30% come back in ~4 seconds and about
+70% take ~25 seconds - *longer* than a page that found something. So "an
+empty page is always fast" is wrong; the afternoon it was measured simply
+happened to be dominated by the fast kind.
+
+The conclusion survives anyway, and for a better reason. A fast-empty rate
+cannot separate a refusal from a barren date, because **both populations
+contain fast empties** - so no threshold on timing alone will ever do it.
+The costume changed; the mistake did not.
 
 Moving the threshold a third time would be a third guess. The question the
 data *can* answer is the one `cli.run_looks_blocked` already asks of a
@@ -1686,6 +1696,36 @@ grid's. `render()` still refuses when there is genuinely nothing, and
 
 **The general rule: an early return that predates a later data source
 quietly gives the earlier one authority it was never meant to have.**
+
+## What "empty" actually means, measured
+
+Asked directly on 2026-08-25 - is an empty window Google blocking us, or a
+bug? Neither, and the numbers separate the three cases cleanly.
+
+Across 180 checks with `blank` recorded:
+
+    93  gave a bookable, visa-free fare        52%
+     0  returned fares that were all US/Canada transits
+    87  returned no fares at all for that date  48%
+
+**Google is answering.** Roughly half of all date pairs on this route
+simply have no itinerary Google will sell, which is unremarkable for a
+21-to-38-night round trip between San Jose and Tokyo on specific days.
+
+Three things say it is not a block:
+
+* the blank pages take a **median of 25 seconds** - Google searching
+  properly and reporting nothing, where a refusal comes back in 3-4;
+* they are **interleaved** with windows answering in full in the same
+  minutes, and a block takes everything down at once;
+* an empty is only ever *trusted* when something nearby returned fares -
+  that is what `connection_proven` is for, so an empty recorded during a
+  genuine outage is queued rather than believed.
+
+The zero in the middle row is worth noting too: on this route, when Google
+has flights for a date at all, at least one of them is visa-free. The
+heavy visa rejection shows up *within* a window - 9 of 13 options on a
+typical one - not as whole windows lost to it.
 
 ## Layout
 
