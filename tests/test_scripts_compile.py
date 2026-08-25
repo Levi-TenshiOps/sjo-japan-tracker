@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pathlib
 import py_compile
+import re
 import subprocess
 from pathlib import Path
 
@@ -329,12 +330,23 @@ class TestTheInstallerNeverArmsTheThrottleAgain:
             if "print(" in ln:
                 assert bad not in ln, ln
 
-    def test_the_safe_default_is_still_ninety(self):
-        """The installer relies on this, so it must not drift."""
+    def test_the_default_rate_is_a_safe_one(self):
+        """The installer relies on the default, so it must stay sane.
+
+        Pinned as a floor rather than an exact number, because the rate is
+        meant to be raised deliberately - 90 to 40 on 2026-08-25 - and a
+        test asserting one value would have to be edited every time, which
+        is how a guard stops being read. What must never come back is a
+        rate anywhere near the 6s that caused the day-long block.
+        """
         done = subprocess.run(
             [sys.executable, str(ROOT / "sweep_forever.py"), "--help"],
             capture_output=True, text=True, timeout=60, cwd=str(ROOT))
-        assert "default 90" in done.stdout, done.stdout
+        m = re.search(r"default (\d+(?:\.\d+)?)", done.stdout)
+        assert m, done.stdout
+        assert float(m.group(1)) >= 30.0, (
+            f"the default delay is {m.group(1)}s - under 30s is the "
+            f"territory that got this address blocked")
 
 
 class TestTheStartupLauncherActuallyLogs:

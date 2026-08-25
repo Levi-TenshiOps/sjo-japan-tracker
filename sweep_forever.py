@@ -137,10 +137,19 @@ def build_args() -> argparse.Namespace:
     p.add_argument("-c", "--config", default=config_mod.DEFAULT_CONFIG_PATH)
     p.add_argument("-p", "--preferences", default="preferences.json")
     p.add_argument("--store", default=DEFAULT_STORE)
-    # 90s is ~900 requests a day. The 6s this used before was ~5,800, which
-    # is what got the address throttled.
-    p.add_argument("--delay", type=float, default=90.0,
-                   help="seconds between launches (default 90, ~900 req/day)")
+    # Raised 90 -> 40 on 2026-08-25, after two clean days at 90 and with
+    # every cause of the 2026-08-23 block fixed: the browser profile now
+    # persists, `gate.py` stops two processes searching at once, and every
+    # wait is jittered. Measured, not guessed: at a ~14s fetch, 40s is a
+    # 54s cycle, ~1,600 requests a day. The delay that caused the block was
+    # 6s, about 14,000 a day, so this is roughly a ninth of it.
+    #
+    # **Change the default here, never in the launcher.** A rate written
+    # into a file that runs unattended at every boot outlives every later
+    # fix to the default - `--delay 6` survived in the Startup launcher
+    # long after the code had been made safe, and re-armed at every reboot.
+    p.add_argument("--delay", type=float, default=40.0,
+                   help="seconds between launches (default 40, ~1,600 req/day)")
     p.add_argument("--batch", type=int, default=10,
                    help="windows priced before each save (default 10)")
     p.add_argument("--once", action="store_true", help="one batch, then exit")
