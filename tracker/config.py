@@ -36,6 +36,11 @@ class Config:
     good_price_usd: int = 1380
     great_price_usd: int = 1150
     max_stops: int = 2
+    # The HTTP grid cannot see stays longer than this; the server-rendered
+    # HTML carries no prices past ~30 nights. Measured over all history:
+    # 509 grid fares at <=30 nights, zero at >=31. Chrome is unaffected and
+    # still prices them. 0 disables the skip.
+    http_max_nights: int = 30
     max_total_hours: int | None = 60
     min_layover_min: int = 75
 

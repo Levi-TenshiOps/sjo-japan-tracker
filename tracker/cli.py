@@ -112,6 +112,33 @@ def _rotate(items: list[str], by: int) -> list[str]:
 def collect(cfg, plan, searcher: Searcher, probe_destinations=()):
     """This slice's searches: (accepted, rejected, errors, empties, bands)."""
     pairs = plan.date_pairs()
+    # The HTTP grid cannot see a stay longer than ~30 nights. That is not a
+    # throttle and not a fare rule: the server-rendered HTML this path reads
+    # simply carries no prices past that point, while the same URL in a
+    # browser shows them - which is how a $1,390 32-night fare was nearly
+    # excluded for good in 2026-08.
+    #
+    # Measured across all of `price_history.csv`: 509 grid fares at 30
+    # nights or fewer, and **zero** at 31 or more. So every such request is
+    # spent to be told nothing, and it is worse than merely wasted - those
+    # empties feed `throttle.py`, which cuts the grid's budget, which is
+    # already floored at 8. A structural blind spot was being read as a bad
+    # connection and answered by making the grid smaller.
+    #
+    # On 2026-08-24 the rotation walked onto 31-36 night stays and the empty
+    # rate stepped from a stable 25% to 75% for three consecutive runs.
+    # Every empty window was 31 nights or longer; not one was under.
+    #
+    # Chrome still prices these windows, and the sweep still walks them.
+    if cfg.http_max_nights:
+        usable = [(a, b) for a, b in pairs
+                  if b is None or (b - a).days <= cfg.http_max_nights]
+        skipped = len(pairs) - len(usable)
+        if skipped and usable:
+            log.info("Grid: skipping %d window(s) over %d nights - the HTTP "
+                     "path cannot see them; Chrome covers those",
+                     skipped, cfg.http_max_nights)
+            pairs = usable
     if not pairs:
         return [], [], ["no travel windows left to search"], (0, 0), None
 

@@ -1352,6 +1352,53 @@ point. The freed launches are available to `hot_list_size` if and when that
 is raised - see "Chrome does not spend its budget" - so the two changes
 compose instead of stacking traffic.
 
+## The grid was starving itself on a blind spot it already knew about
+
+Found 2026-08-24 while answering "can we drop the sweep to 45s?" - the
+readiness gate said no, and the reason it gave turned out to be wrong in
+an interesting way.
+
+`throttle.json` showed the grid's empty rate stepping from a stable 25% to
+**75%, and staying there for three consecutive runs**. That reads as an
+address under pressure, and it is exactly the signal that would stop a
+rate rise.
+
+It was not. Every empty window in those runs was **31 nights or longer**,
+and not one was under:
+
+    2026-10-03 -> 2026-11-03   31 nights
+    2027-01-03 -> 2027-02-08   36 nights
+    ...
+
+This file has recorded the cause since 2026-08-22: the server-rendered
+HTML the grid reads **carries no prices past ~30 nights**, while the same
+URL in a browser shows them. It is the boundary that nearly cost a real
+$1,390 32-night fare when it was mistaken for a max-stay rule.
+
+Confirmed across all of `price_history.csv`: **509 grid fares at 30 nights
+or fewer, and zero at 31 or more.** Not rare - never.
+
+**The waste was the smaller half.** Those empties feed `throttle.py`,
+which cuts the grid's request budget, which has been floored at 8 since
+2026-08-23. So a structural blind spot was being read as a bad connection
+and answered by making the grid smaller - and on these runs it was
+spending six of its eight requests to be told nothing.
+
+`http_max_nights` (30) keeps the grid off them. Chrome is untouched and
+still prices those windows - it found a $1,347 fare on a **32-night** stay
+the same afternoon - and the sweep still walks them.
+
+One guard: if *every* window in a slice is a long stay, they are searched
+anyway rather than returning "no travel windows left". Skipping them all
+would abort the grid, and on a day the sweep is also down that is the
+email.
+
+**The lesson, for the third time today: an empty answer is not evidence
+about the connection.** It was the calendar in the fast-empty detector, the
+visa filter in the ledger, and here it is a known limit of the fetch
+method. Before reading an empty rate as pressure from Google, check what
+was actually asked.
+
 ## Layout
 
 ```
