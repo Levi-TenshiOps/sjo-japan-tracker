@@ -1394,11 +1394,23 @@ def sweep_batch(
             # Spend only what freshness actually requires; the rest goes
             # on coverage. `hot_share` is the ceiling, not the setting.
             if pending:
-                # The focus's freshness launch: hot only, never cold, or
-                # the cursor would creep through months being deferred.
-                w, was_hot = next_window(windows, store,
-                                         threshold=hot_threshold,
-                                         hot_share=1.0, warm_share=0.0)
+                # The focus's freshness launch. Pick the hot window
+                # *directly* rather than asking `next_window` for one:
+                # with hot_share=1.0 its interleave works out to "every
+                # second launch", so on the others it falls through to the
+                # cold cursor and advances it - measured 2026-08-24, the
+                # cursor crept forward during a focus that had promised to
+                # freeze it. Nothing was lost, but the focus was diluted
+                # and the log said something untrue.
+                hot = hot_keys(store, threshold=hot_threshold)
+                by_key = {x.key: x for x in windows}
+                picks = [by_key[k] for k in hot if k in by_key]
+                if picks:
+                    w = picks[(store.windows_priced // FOCUS_HOT_EVERY)
+                              % len(picks)]
+                    was_hot = True
+                else:
+                    w, was_hot = focus_next(pending, store) or pending[0], True
             else:
                 share = needed_hot_share(
                     len(hot_keys(store, threshold=hot_threshold)),

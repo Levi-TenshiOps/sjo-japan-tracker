@@ -21,7 +21,7 @@ import pytest
 
 from tracker.schedule import Window
 from tracker.sweeper import (
-    SweepStore, focus_pending, sweep_batch,
+    FOCUS_HOT_EVERY, SweepStore, focus_pending, sweep_batch,
 )
 
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -473,3 +473,65 @@ class TestAFocusMonthThatSearchesNothing:
         # rewrap cannot break this for a reason unrelated to the warning.
         assert "are not in the searched window" in src
         assert "none of the requested months are searched" in src
+
+
+class TestTheCursorIsGenuinelyFrozen:
+    """"Paused" has to be true, not nearly true.
+
+    The freshness launch used to ask `next_window` for a hot window with
+    hot_share=1.0. Its interleave works out to "every second launch", so on
+    the others it fell through to the cold cursor and advanced it -
+    measured 2026-08-24, the cursor crept during a focus that had just
+    logged "the cold rotation is paused". Nothing was lost, but the focus
+    was diluted and the log said something untrue.
+    """
+
+    def _with_a_hot_window(self, n=12):
+        ws = [Window(date(2027, 1, 1) + timedelta(days=i),
+                     date(2027, 1, 1) + timedelta(days=i + 21))
+              for i in range(n)]
+        s = SweepStore()
+        s.found[ws[0].key] = {
+            "depart": ws[0].depart.isoformat(), "ret": ws[0].back.isoformat(),
+            "price_usd": 1300, "origin": "SJO", "destination": "TYO",
+            "stops": [], "airlines": "", "total_minutes": 100,
+            "deep_link": "", "seen_at": "2026-08-24T23:00:00+00:00"}
+        return ws, s
+
+    def test_the_cursor_never_moves_with_a_hot_list(self):
+        ws, s = self._with_a_hot_window()
+        for _ in range(20):
+            sweep_batch(ws, s, batch=1, fetch=lambda u: "",
+                        sleep=lambda _: None, delay_s=0,
+                        focus_months=[1], hot_threshold=1400)
+        assert s.cursor == 0, f"the cold cursor crept to {s.cursor}"
+
+    def test_the_cursor_never_moves_without_one(self):
+        ws = [Window(date(2027, 1, 1) + timedelta(days=i),
+                     date(2027, 1, 1) + timedelta(days=i + 21))
+              for i in range(12)]
+        s = SweepStore()
+        for _ in range(20):
+            sweep_batch(ws, s, batch=1, fetch=lambda u: "",
+                        sleep=lambda _: None, delay_s=0, focus_months=[1])
+        assert s.cursor == 0, f"the cold cursor crept to {s.cursor}"
+
+    def test_every_launch_still_prices_something(self):
+        """Freezing the cursor must not mean doing nothing."""
+        ws, s = self._with_a_hot_window()
+        sweep_batch(ws, s, batch=20, fetch=lambda u: "",
+                    sleep=lambda _: None, delay_s=0,
+                    focus_months=[1], hot_threshold=1400)
+        assert s.windows_priced == 20
+
+    def test_the_hot_window_really_is_refreshed(self):
+        """The whole reason for the freshness launch."""
+        ws, s = self._with_a_hot_window()
+        before = s.found[ws[0].key]["seen_at"]
+        dom = _io.open(FIXTURE, encoding="utf-8").read()
+        for _ in range(FOCUS_HOT_EVERY + 1):
+            sweep_batch(ws, s, batch=1, fetch=FakeChrome(dom),
+                        sleep=lambda _: None, delay_s=0,
+                        focus_months=[1], hot_threshold=1400)
+        assert s.found[ws[0].key]["seen_at"] != before, (
+            "the cheapest known fare was never refreshed")
