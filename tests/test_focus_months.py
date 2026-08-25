@@ -740,3 +740,58 @@ class TestTheFocusNeverCrashesOnAStoreItOnlyReads:
         for w in ws:
             s.found[w.key] = {"price_usd": 1000}
         assert focus_pending(ws, s, [1]) == []
+
+
+class TestTheWatchDoesNotCallNothingSuccess:
+    """Zero pending means "done" or "there was never anything there".
+
+    Those look identical from a count, and this project has been caught by
+    that before: a named month the horizon cannot reach searches nothing
+    and reads as a month with no cheap fares.
+    """
+
+    def _answered(self):
+        ws = [Window(date(2027, 1, 1) + timedelta(days=i),
+                     date(2027, 1, 1) + timedelta(days=i + 21))
+              for i in range(6)]
+        s = SweepStore()
+        for w in ws:
+            s.checked[w.key] = {"healthy": True}
+        return ws, s
+
+    def test_an_unsearched_month_is_not_reported_complete(self):
+        from tracker.sweeper import watch_lines
+        ws, s = self._answered()
+        text = "\n".join(watch_lines(ws, s, threshold=1400, focus_months=[6]))
+        assert "NOT SEARCHED" in text
+        assert "included_months" in text
+
+    def test_a_genuinely_finished_focus_still_says_complete(self):
+        from tracker.sweeper import watch_lines
+        ws, s = self._answered()
+        text = "\n".join(watch_lines(ws, s, threshold=1400, focus_months=[1]))
+        assert "complete" in text and "NOT SEARCHED" not in text
+
+    def test_a_mixed_request_says_which_month_was_empty(self):
+        from tracker.sweeper import watch_lines
+        ws, s = self._answered()
+        text = "\n".join(watch_lines(ws, s, threshold=1400, focus_months=[1, 6]))
+        assert "complete" in text and "June has no windows" in text
+
+    def test_an_empty_window_list_does_not_divide_by_zero(self):
+        from tracker.sweeper import watch_lines
+        assert watch_lines([], SweepStore(), threshold=1400, focus_months=[1])
+
+
+class TestFocusAheadOfTheColdCursor:
+    def test_windows_the_cursor_has_not_reached_are_still_priced(self):
+        ws = ([Window(date(2027, 1, 1) + timedelta(days=i),
+                      date(2027, 1, 1) + timedelta(days=i + 21)) for i in range(6)]
+              + [Window(date(2027, 2, 1) + timedelta(days=i),
+                        date(2027, 2, 1) + timedelta(days=i + 21)) for i in range(6)])
+        s = SweepStore()
+        for _ in range(6):
+            sweep_batch(ws, s, batch=1, fetch=lambda u: "",
+                        sleep=lambda _: None, delay_s=0, focus_months=[2])
+        assert s.cursor == 0, "a focus ahead of the cursor moved it"
+        assert sum(1 for k in s.checked if k.startswith("2027-02")) == 6

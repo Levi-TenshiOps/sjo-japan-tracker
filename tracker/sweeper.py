@@ -638,7 +638,21 @@ def watch_lines(windows: Sequence, store: "SweepStore", *,
             out.append(f"  {settled:,} of {in_focus:,} answered   "
                        f"{len(pending):,} still open")
         else:
-            out.append(f"  FOCUS {names}: complete")
+            # "Complete" and "there was nothing there" look identical from
+            # a count of zero, and this project has been caught by that
+            # before - a named month the horizon cannot reach searches
+            # nothing and reads as a month with no cheap fares. Say which.
+            have = {w.depart.month for w in windows}
+            absent = [m for m in focus_months if m not in have]
+            if absent and not (set(focus_months) & have):
+                out.append(f"  FOCUS {names}: NOT SEARCHED - no windows in "
+                           f"those months at all (check included_months)")
+            elif absent:
+                out.append(f"  FOCUS {names}: complete (note: "
+                           f"{', '.join(_MONTH_LABEL.get(m, str(m)) for m in absent)}"
+                           f" has no windows at all)")
+            else:
+                out.append(f"  FOCUS {names}: complete")
         out.append("")
 
     out += [f"  {'full sweep (paused)' if pending else 'full sweep'}",
