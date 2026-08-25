@@ -9,12 +9,21 @@ passport cannot transit without a consular C-1 visa. Searching by hand is
 therefore actively misleading — most of what you see, you cannot book.
 This filters all of it out, along with Canada, mainland China and Russia.
 
+**You need:** Python 3.10+, **Google Chrome installed** (the only thing
+that sees the cheap fares), and a Gmail **app password** — not your normal
+password, which Google blocks.
+
 ```bash
 pip install -r requirements.txt
-python setup_tracker.py        # email, months, trip lengths, budget
+python setup_tracker.py        # months, trip lengths, budget
+python setup_email.py          # your address and app password -> .env
 python install_schedule.py     # installs the twice-daily emails
-python sweep_forever.py        # the background search (leave it running)
+python sweep_forever.py        # the background search — leave it running
 ```
+
+`setup_email.py` checks the credentials against the mail server before
+saving, and touches nothing else — so you can re-run it to fix a password
+without disturbing settings you have tuned.
 
 Nothing personal is stored in a tracked file, so the repository is safe to
 publish as-is.
@@ -98,11 +107,23 @@ A 31 March departure comes home in late April, so it is not searched at
 all. That leaves **2,745 date combinations** — 161 departure days × up to
 18 trip lengths.
 
-A full pass takes about 3.5 days. Coverage is tiered so the dates that
-matter are checked far more often: windows already known to be cheap every
-few hours, plausible dates next, then everything else in rotation. The
-tiers are derived from your own data, so if an airline changes its schedule
-the tracker follows within a pass.
+Coverage is tiered, so the dates most likely to be cheap are checked far
+more often than the rest:
+
+| Tier | Revisited |
+|---|---|
+| already known to be cheap | every few hours |
+| plausible dates (by weekday pattern) | ~2 days |
+| everything else, in rotation | ~8 days |
+
+That last number is the honest limit. Walking all 2,745 windows back to
+back would take about 3 days, but only around 40% of searches go to the
+cold rotation — the rest keep the good candidates fresh, which is the
+better trade when a fare can move overnight.
+
+The tiers are derived from your own data, never hardcoded, so if an
+airline changes its schedule the tracker follows within a pass. Check the
+current figures any time with `python sweep_forever.py --coverage`.
 
 ### Finishing some months first
 
