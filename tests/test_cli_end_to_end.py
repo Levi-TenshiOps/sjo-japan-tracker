@@ -145,3 +145,62 @@ class TestNothingBetweenTheSearchAndTheEmailMayRaise:
         code = cli.run(["--dry-run", "-p", workspace["prefs"],
                         "-c", workspace["config"]])
         assert code == 0, "a failed history write killed the run"
+
+
+class TestTheWeakestSourceHasNoVeto:
+    """The HTTP grid must not be able to cancel the email.
+
+    It is the weakest source in the project: floored at 8 requests, ~74% of
+    what it returns is visa-rejected, and it cannot see stays over 30
+    nights at all. `run()` used to abort the moment it came back empty -
+    *before* Chrome ran and before the sweep's findings were read - so a
+    quiet grid threw away a Chrome-verified $1,347 and 400 sweep findings
+    and sent nothing.
+    """
+
+    def _src(self):
+        import pathlib
+        return (pathlib.Path(__file__).resolve().parent.parent
+                / "tracker" / "cli.py").read_text(encoding="utf-8")
+
+    def test_an_empty_grid_is_no_longer_an_early_return(self):
+        src = self._src()
+        i = src.find("if not accepted:")
+        assert i > 0
+        block = src[i:i + 400]
+        assert "return 0" not in block, "the grid can still veto the email"
+        assert "continuing on Chrome" in block
+
+    def test_it_still_stops_when_every_source_is_empty(self):
+        src = self._src()
+        assert "Nothing usable from any source this run." in src
+
+    def test_the_email_renders_from_verified_alone(self):
+        """No grid rows at all, and it still produces a full message."""
+        from datetime import date
+        from tracker import email_render
+        from tracker.browser import BrowserOption
+        from tracker.pricing import PriceBands
+
+        opt = BrowserOption(
+            price_usd=1347, origin="SJO", destination="TYO",
+            depart_date=date(2027, 1, 29), return_date=date(2027, 2, 25),
+            stops=("ZRH",), airlines=("SWISS",), total_minutes=2780,
+            deep_link="https://www.google.com/travel/flights/x")
+        bands = PriceBands(low=2213, high=3202, usual=2866, source="SEED",
+                           seen_low=1347, seen_high=13127)
+        mail = email_render.render([], bands, threshold=1400, is_great=False,
+                                   generated_at="now", verified=[opt])
+        assert email_render.GREETING in mail.html
+        assert email_render.GREETING in mail.text
+        assert "$1,347" in mail.subject
+        assert "0 option" not in mail.subject, "it counted only the grid"
+
+    def test_it_still_refuses_when_there_is_truly_nothing(self):
+        import pytest as _pytest
+        from tracker import email_render
+        from tracker.pricing import PriceBands
+        bands = PriceBands(low=2213, high=3202, usual=2866, source="SEED")
+        with _pytest.raises(ValueError):
+            email_render.render([], bands, threshold=1400, is_great=False,
+                                generated_at="now", verified=[])

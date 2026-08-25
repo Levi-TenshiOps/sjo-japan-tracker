@@ -111,6 +111,30 @@ def _trip_nights(itin: Itinerary) -> int | None:
     return (itin.return_date - itin.outbound_date).days
 
 
+def _headline(itineraries: Sequence[Itinerary], verified: Sequence):
+    """The fare the email is about, from whichever source has one.
+
+    The HTTP grid used to be assumed non-empty, and that assumption gave
+    the *weakest* source a veto over the whole product: the grid is
+    floored at 8 requests, ~74% of what it returns is visa-rejected, and
+    it cannot see stays over 30 nights at all. A run where it happened to
+    find nothing threw away a Chrome-verified $1,347 and 400 sweep
+    findings and sent no email.
+
+    Returns (price, destination, is_from_grid) or None when there is
+    genuinely nothing to say.
+    """
+    grid = min(itineraries, key=lambda i: i.price_usd) if itineraries else None
+    ver = min(verified, key=lambda o: o.price_usd) if verified else None
+    if grid is None and ver is None:
+        return None
+    if grid is None:
+        return ver.price_usd, ver.destination, False
+    if ver is None or grid.price_usd <= ver.price_usd:
+        return grid.price_usd, grid.destination, True
+    return ver.price_usd, ver.destination, False
+
+
 def build_subject(
     itineraries: Sequence[Itinerary], bands: PriceBands, *, is_great: bool,
     verified: Sequence = (),
@@ -121,7 +145,14 @@ def build_subject(
     when it beat the grid - otherwise the phone says $1,635 for a day the
     email itself is about a $1,347 seat.
     """
-    best = min(itineraries, key=lambda i: i.price_usd)
+    head = _headline(itineraries, verified)
+    if head is None:
+        return "✈ SJO–Japan — nothing to report"
+    if itineraries:
+        best = (min(itineraries, key=lambda i: i.price_usd) if itineraries
+            else min(verified, key=lambda o: o.price_usd))
+    else:
+        best = min(verified, key=lambda o: o.price_usd)
     if verified:
         cheapest_verified = min(verified, key=lambda o: o.price_usd)
         if cheapest_verified.price_usd < best.price_usd:
@@ -137,7 +168,12 @@ def build_subject(
     dest = best.destination
     if is_great:
         return f"\u2708 {price} SJO\u2013{dest} \u2014 {BAND_LABEL[band]}, book now"
-    return f"\u2708 {price} SJO\u2013{dest} \u2014 {BAND_LABEL[band]} ({len(itineraries)} options)"
+    # Count every option the email actually shows. Counting the grid alone
+    # printed "(0 options)" beside a $1,347 headline on a run where the
+    # grid had found nothing and Chrome had carried the whole email.
+    n = len(itineraries) + len(verified)
+    return (f"\u2708 {price} SJO\u2013{dest} \u2014 {BAND_LABEL[band]} "
+            f"({n} option{'s' if n != 1 else ''})")
 
 
 # --- HTML ------------------------------------------------------------------
@@ -361,7 +397,8 @@ def render_html(
              priority=bool(in_priority and in_priority(i)))
         for n, i in enumerate(shown)
     ]
-    best = min(itineraries, key=lambda i: i.price_usd)
+    best = (min(itineraries, key=lambda i: i.price_usd) if itineraries
+            else min(verified, key=lambda o: o.price_usd))
     # The fare the email is actually about. The grid's `best` is the dear
     # one, so measuring against it produced "$165 below the $1,800
     # travellers usually pay" in an email whose own headline fare was
@@ -372,7 +409,8 @@ def render_html(
 
     # Name the city, not the code we happened to search. A metro-code search
     # reads as "TYO" everywhere unless it is translated here.
-    dests = sorted({i.destination for i in itineraries})
+    dests = (sorted({i.destination for i in itineraries})
+             or sorted({o.destination for o in verified}))
     dest_txt = "Japan" if len(dests) > 1 else describe_destination(dests[0])
 
     # The headline must count the browser-verified fares too. Built from
@@ -576,7 +614,8 @@ def render_text(
     priority_label: str = "",
     verified: Sequence = (),
 ) -> str:
-    best = min(itineraries, key=lambda i: i.price_usd)
+    best = (min(itineraries, key=lambda i: i.price_usd) if itineraries
+            else min(verified, key=lambda o: o.price_usd))
     cheapest_seen = min([best.price_usd] + [o.price_usd for o in verified])
     band = bands.classify(cheapest_seen)
     lines = [
@@ -763,7 +802,7 @@ def render(
     priority_label: str = "",
     verified: Sequence = (),
 ) -> EmailContent:
-    if not itineraries:
+    if not itineraries and not verified:
         raise ValueError("refusing to render an email with no itineraries")
     shared = dict(
         threshold=threshold, is_great=is_great, generated_at=generated_at,

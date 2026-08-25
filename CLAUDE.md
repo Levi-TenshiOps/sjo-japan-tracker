@@ -1650,6 +1650,43 @@ At $1,347 it would catch 35 fares (1.24%): rare, and possible. Left for
 the trip owner to set, because how eager the alerts are is theirs to
 choose, not a defect to fix unilaterally.
 
+## The weakest source had a veto over the whole product
+
+Found 2026-08-25 while rendering a real email with an empty grid, which
+raised rather than rendering. Chasing why led somewhere much worse.
+
+`run()` did this, and it did it **before Chrome ran and before the sweep's
+findings were read**:
+
+    if not accepted:            # accepted = the HTTP grid's results
+        log.warning("Nothing usable this run.")
+        return 0
+
+So a quiet grid cancelled the email. And the grid is the weakest thing
+here by a distance: floored at 8 requests since 2026-08-23, ~74% of what
+it returns is visa-rejected, and it cannot see a stay over 30 nights at
+all - a limit this file has documented since 2026-08-22 and which was
+*narrowed further* the same day by `http_max_nights`.
+
+Meanwhile the run was holding a Chrome-verified $1,347 and 400 sweep
+findings, and threw both away.
+
+It had not fired yet - the grid's usable count has never reached zero,
+its minimum is 3 - which is exactly why it was worth fixing before it
+did. The whole design says Chrome is the source of truth and the grid is
+"real, bookable fares that give the market some shape". A source that
+cannot find the fares that matter should not be able to decide whether
+the trip owner hears anything.
+
+The email now renders from `verified` alone: `_headline` takes the best
+fare from whichever source has one, the destination line falls back to the
+verified rows, and the subject counts every option shown rather than the
+grid's. `render()` still refuses when there is genuinely nothing, and
+`run()` still stops - but only after asking every source.
+
+**The general rule: an early return that predates a later data source
+quietly gives the earlier one authority it was never meant to have.**
+
 ## Layout
 
 ```

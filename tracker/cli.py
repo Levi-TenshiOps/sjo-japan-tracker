@@ -542,9 +542,19 @@ def run(argv: list[str] | None = None) -> int:
     for rej in rejected[:5]:
         log.debug("rejected %s: %s", rej.itinerary.signature, rej.reason)
 
+    # Deliberately *not* an early return any more. The HTTP grid is the
+    # weakest source in the project - floored at 8 requests, ~74% of what
+    # it returns is visa-rejected, and it cannot see stays over 30 nights
+    # at all - and aborting here handed it a veto over the whole product.
+    # A run where it happened to find nothing threw away a Chrome-verified
+    # $1,347 and 400 sweep findings and sent no email at all.
+    #
+    # The run now continues and decides at the end, when it knows what
+    # Chrome and the sweep found. Nothing is sent only when there is
+    # genuinely nothing to say.
     if not accepted:
-        log.warning("Nothing usable this run.")
-        return 0
+        log.warning("The grid found nothing usable; continuing on Chrome "
+                    "and the background sweep.")
 
     hist_prices, hist_days = [], 0
     if not args.no_history:
@@ -591,9 +601,11 @@ def run(argv: list[str] | None = None) -> int:
                  format_price(google_bands.low), format_price(google_bands.high),
                  format_price(google_bands.usual) if google_bands.usual else "n/a")
 
-    best = accepted[0]
-    log.info("Cheapest: %s %s %s -> %s", format_price(best.price_usd),
-             best.route_label, best.outbound_date, bands.classify(best.price_usd))
+    if accepted:
+        best = accepted[0]
+        log.info("Cheapest: %s %s %s -> %s", format_price(best.price_usd),
+                 best.route_label, best.outbound_date,
+                 bands.classify(best.price_usd))
 
     # Re-price the windows that matter through Chrome. The HTTP grid above
     # cannot see the Zurich routings where the sub-threshold fares live: on
@@ -731,13 +743,25 @@ def run(argv: list[str] | None = None) -> int:
     # threshold; in digest mode nothing may clear it, and then the email is
     # about the cheapest fare found. Never index qualifying[0] directly:
     # under daily_digest that list is empty on an expensive day.
-    headline_pick = qualifying[0] if qualifying else best
+    # With an empty grid there is no `best` at all, and the email is then
+    # entirely Chrome's and the sweep's. Fall through to `verified`.
+    headline_pick = (qualifying[0] if qualifying
+                     else (accepted[0] if accepted else None))
+    if headline_pick is None and not verified:
+        log.warning("Nothing usable from any source this run.")
+        return 0
+    if headline_pick is None:
+        alert_price = verified[0].price_usd
+        alert_signature = f"chrome|{verified[0].deep_link[:80]}"
+        log.info("Alert price comes from Chrome: %s (the grid found nothing)",
+                 format_price(alert_price))
     # Chrome sees fares the grid cannot. When it found something cheaper,
     # that is the day's real best price and the alert must be about it,
     # otherwise the email reports $1,635 on a day a $1,347 seat existed.
-    alert_price = headline_pick.price_usd
-    alert_signature = headline_pick.signature
-    if verified and verified[0].price_usd < alert_price:
+    if headline_pick is not None:
+        alert_price = headline_pick.price_usd
+        alert_signature = headline_pick.signature
+    if headline_pick is not None and verified and verified[0].price_usd < alert_price:
         alert_price = verified[0].price_usd
         alert_signature = f"chrome|{verified[0].deep_link[:80]}"
         log.info("Alert price comes from Chrome: %s (grid said %s)",
