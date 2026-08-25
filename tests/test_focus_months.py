@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -257,3 +257,113 @@ class TestAnEmptyWindowCanActuallyBeFinished:
                     sleep=lambda _: None, delay_s=0, focus_months=[1])
         assert not [k for k, v in s.checked.items() if v.get("healthy")]
         assert s.suspect, "an unprovable empty was not queued"
+
+
+class TestAFocusCannotDeadlock:
+    """Progress must be structural, not a lucky side effect.
+
+    A window that answers blank while nothing else has recently returned
+    fares is not trusted, so it stays at the head of `pending` and gets
+    picked again - and since it is then the *only* thing being priced, the
+    evidence needed to trust it can never arrive. Self-reinforcing.
+
+    Reproduced 2026-08-24 with an empty hot list: eight launches, one
+    window. In production the one-in-five freshness launch broke it by
+    pricing a hot window that returned fares - luck, not design, and only
+    while the hot list is non-empty.
+    """
+
+    def _three_january(self):
+        return [Window(date(2027, 1, d), date(2027, 1, d) + timedelta(days=21))
+                for d in (4, 5, 6)]
+
+    def test_it_rotates_instead_of_repeating(self):
+        ws = self._three_january()
+        s = SweepStore()
+        seen = []
+        for _ in range(8):
+            sweep_batch(ws, s, batch=1, fetch=lambda u: seen.append(u) or "",
+                        sleep=lambda _: None, delay_s=0, focus_months=[1])
+        assert len(set(seen)) == 3, (
+            f"the focus deadlocked: {len(set(seen))} distinct of {len(seen)}")
+
+    def test_every_window_gets_touched(self):
+        ws = self._three_january()
+        s = SweepStore()
+        for _ in range(6):
+            sweep_batch(ws, s, batch=1, fetch=lambda u: "",
+                        sleep=lambda _: None, delay_s=0, focus_months=[1])
+        assert set(s.checked) == {w.key for w in ws}
+
+
+class TestFocusNextPicksFairly:
+    def _win(self, day):
+        return Window(date(2027, 1, day), date(2027, 1, day) + timedelta(days=21))
+
+    def test_a_never_checked_window_wins(self):
+        from tracker.sweeper import focus_next
+        a, b = self._win(4), self._win(5)
+        s = SweepStore()
+        s.checked[a.key] = {"at": datetime.now(timezone.utc).isoformat()}
+        assert focus_next([a, b], s) is b
+
+    def test_order_is_kept_when_nothing_is_recent(self):
+        from tracker.sweeper import focus_next
+        a, b = self._win(4), self._win(5)
+        s = SweepStore()
+        old = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
+        s.checked[a.key] = {"at": old}
+        s.checked[b.key] = {"at": old}
+        assert focus_next([a, b], s) is a, "January order was not preserved"
+
+    def test_all_inside_the_cooldown_takes_the_oldest(self):
+        """Near the end a focus laps a small set; it must not stall."""
+        from tracker.sweeper import focus_next
+        a, b = self._win(4), self._win(5)
+        s = SweepStore()
+        now = datetime.now(timezone.utc)
+        s.checked[a.key] = {"at": now.isoformat()}
+        s.checked[b.key] = {"at": (now - timedelta(minutes=5)).isoformat()}
+        assert focus_next([a, b], s) is b
+
+    def test_an_unparsable_timestamp_does_not_stall_it(self):
+        from tracker.sweeper import focus_next
+        a = self._win(4)
+        s = SweepStore()
+        s.checked[a.key] = {"at": "not a date"}
+        assert focus_next([a], s) is a
+
+    def test_nothing_pending_is_nothing(self):
+        from tracker.sweeper import focus_next
+        assert focus_next([], SweepStore()) is None
+
+
+class TestTheWatchShowsFocusProgress:
+    """A frozen bar for a day reads as a stalled sweep."""
+
+    def test_it_leads_with_the_focus_when_one_is_running(self):
+        from tracker.sweeper import watch_lines
+        ws = windows_across_months()
+        s = SweepStore()
+        s.cursor = 6
+        text = "\n".join(watch_lines(ws, s, threshold=1400, focus_months=[1]))
+        assert "FOCUS January" in text
+        assert "still open" in text
+        assert "full sweep (paused)" in text, "the frozen cursor is unlabelled"
+
+    def test_a_finished_focus_says_so(self):
+        from tracker.sweeper import watch_lines
+        ws = windows_across_months()
+        s = SweepStore()
+        for w in ws:
+            if w.depart.month == 1:
+                s.checked[w.key] = {"healthy": True}
+        text = "\n".join(watch_lines(ws, s, threshold=1400, focus_months=[1]))
+        assert "complete" in text
+
+    def test_without_a_focus_it_is_unchanged(self):
+        from tracker.sweeper import watch_lines
+        ws = windows_across_months()
+        text = "\n".join(watch_lines(ws, SweepStore(), threshold=1400))
+        assert "FOCUS" not in text
+        assert "(paused)" not in text

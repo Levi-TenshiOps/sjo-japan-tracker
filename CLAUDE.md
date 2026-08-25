@@ -1399,6 +1399,45 @@ visa filter in the ledger, and here it is a known limit of the fetch
 method. Before reading an empty rate as pressure from Google, check what
 was actually asked.
 
+## A focus deadlocks unless progress is structural
+
+Found 2026-08-24 by asking, after two rounds of fixes, whether the focus
+had *any* bugs left. It did.
+
+A window that answers blank while nothing else has recently returned fares
+is not trusted, so it stays at the head of `pending` and is picked again.
+And once it is the only thing being priced, the evidence needed to trust
+it can never arrive - the loop feeds itself. Reproduced with an empty hot
+list: **eight launches, one window.**
+
+In production it was not looping, and that was luck rather than design.
+The one-in-five freshness launch prices a hot window, which usually
+returns fares and proves the connection - but only while the hot list is
+non-empty, which is exactly when a new or freshly pruned store is at its
+most vulnerable.
+
+`focus_next` skips any pending window checked within
+`FOCUS_COOLDOWN_SECONDS` (15 min), so the focus rotates. Month-then-date
+order is untouched, so January still finishes before February. When
+everything is inside the cooldown - which happens near the end, lapping a
+small set - it takes the least recently checked rather than stalling.
+
+**The rule worth carrying: never let forward progress depend on a signal
+agreeing with you.** Both of the day's focus bugs were the same shape - a
+selection that could return the same item for ever if some other condition
+never became true.
+
+### The watch bar has to show the work being done
+
+Second issue from the same review, smaller but real. The cold cursor is
+deliberately frozen during a focus, so `--watch` showed a progress bar
+that would not move for a day. That reads as a stalled sweep - and this
+project has spent hours on exactly that misreading before.
+
+It now leads with the focus's own bar and labels the other one
+`full sweep (paused)`, and rates the focus by questions closed per hour
+rather than by a cursor that is standing still on purpose.
+
 ## Focus: finish the months that matter before the rest
 
 Asked for 2026-08-24. The trip owner wants January, February and March to

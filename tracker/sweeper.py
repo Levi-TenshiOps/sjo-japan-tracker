@@ -586,9 +586,16 @@ def _note_unresearched(store: "SweepStore", parsed) -> None:
             rec["min"] = min(int(rec.get("min", opt.price_usd)), opt.price_usd)
 
 
+_MONTH_LABEL = {1: "January", 2: "February", 3: "March", 4: "April",
+                5: "May", 6: "June", 7: "July", 8: "August",
+                9: "September", 10: "October", 11: "November",
+                12: "December"}
+
+
 def watch_lines(windows: Sequence, store: "SweepStore", *,
                 threshold: int | None, delay_s: float = 90.0,
                 started: tuple | None = None,
+                focus_months: Sequence[int] = (),
                 now: datetime | None = None) -> list[str]:
     """A compact live view of the sweep, for `--watch`.
 
@@ -608,19 +615,58 @@ def watch_lines(windows: Sequence, store: "SweepStore", *,
     filled = int(pct / 2.5)
     bar = "#" * filled + "." * (40 - filled)
 
-    out = [f"  [{bar}] {pct:5.1f}%",
-           f"  window {done:,} of {total:,}   "
-           f"{len(store.found):,} fares remembered   "
-           f"{len(store.suspect):,} awaiting a re-check"]
+    out = []
+    # While a focus is on, the cold cursor is deliberately frozen - so
+    # leading with it would show a bar that does not move for a day, which
+    # reads as a stalled sweep. Show the work actually being done.
+    pending = focus_pending(windows, store, focus_months) if focus_months else []
+    if focus_months:
+        names = ", ".join(_MONTH_LABEL.get(m, str(m)) for m in focus_months)
+        if pending:
+            in_focus = sum(1 for w in windows
+                           if w.depart.month in set(focus_months))
+            settled = in_focus - len(pending)
+            fpct = 100.0 * settled / (in_focus or 1)
+            ffill = int(fpct / 2.5)
+            out.append(f"  FOCUS {names}")
+            out.append(f"  [{'#' * ffill}{'.' * (40 - ffill)}] {fpct:5.1f}%")
+            out.append(f"  {settled:,} of {in_focus:,} answered   "
+                       f"{len(pending):,} still open")
+        else:
+            out.append(f"  FOCUS {names}: complete")
+        out.append("")
+
+    out += [f"  {'full sweep (paused)' if pending else 'full sweep'}",
+            f"  [{bar}] {pct:5.1f}%",
+            f"  window {done:,} of {total:,}   "
+            f"{len(store.found):,} fares remembered   "
+            f"{len(store.suspect):,} awaiting a re-check"]
 
     rate = None
     if started:
-        t0, c0 = started
+        t0, c0 = started[0], started[1]
         hours = (now - t0).total_seconds() / 3600.0
         moved = done - c0
         if hours > 0 and moved > 0:
             rate = moved / hours
-    if rate:
+    if pending:
+        # The cursor is frozen, so its rate is zero and would be a lie.
+        # Rate the focus instead, from questions closed while watching.
+        if started and len(started) > 2:
+            t0, _, p0 = started[0], started[1], started[2]
+            hours = (now - t0).total_seconds() / 3600.0
+            closed = p0 - len(pending)
+            if hours > 0 and closed > 0:
+                per_hour = closed / hours
+                eta = len(pending) / per_hour
+                out.append(f"  {per_hour:.0f} answered/hour observed   "
+                           f"~{eta:.1f} h left   focus ends about "
+                           f"{(now + timedelta(hours=eta)).astimezone():%a %d %b %H:%M}")
+            else:
+                out.append("  (watching for a rate...)")
+        else:
+            out.append("  (watching for a rate...)")
+    elif rate:
         left = max(total - done, 0)
         eta = left / rate
         finish = now + timedelta(hours=eta)
@@ -871,6 +917,53 @@ def connection_proven(store: "SweepStore", window: int | None = None) -> bool:
     """
     seen = list(store.recent_worked)[-(window or EMPTY_ALARM_WINDOW):]
     return any(seen)
+
+
+# A focus never re-prices the same window twice inside this. Progress is
+# guaranteed by rotation, not by the connection signal agreeing.
+FOCUS_COOLDOWN_SECONDS = 900.0
+
+
+def focus_next(pending: Sequence, store: "SweepStore", *,
+               cooldown_s: float = FOCUS_COOLDOWN_SECONDS,
+               now: datetime | None = None):
+    """The next focus window to price - never the one just priced.
+
+    `focus_pending` keeps its month-then-date order, so January is still
+    finished before February. This only skips past windows checked in the
+    last `cooldown_s`, which is what makes progress structural.
+
+    Without it a focus can deadlock, and the deadlock is self-reinforcing.
+    A window that answers blank while nothing else has recently returned
+    fares is not trusted, so it stays at the head of `pending` and is
+    picked again - and since it is now the *only* thing being priced, the
+    evidence needed to trust it can never arrive. Reproduced 2026-08-24
+    with an empty hot list: eight launches, one window.
+
+    In production the one-in-five freshness launch happens to break it, by
+    pricing a hot window that returns fares. That is luck, not design: it
+    only holds while the hot list is non-empty.
+    """
+    if not pending:
+        return None
+    now = now or datetime.now(timezone.utc)
+    for w in pending:
+        at = (store.checked.get(w.key) or {}).get("at") or ""
+        if not at:
+            return w                      # never checked - take it
+        try:
+            when = datetime.fromisoformat(at)
+        except ValueError:
+            return w
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        if (now - when).total_seconds() >= cooldown_s:
+            return w
+    # Everything is inside the cooldown, which means the focus is nearly
+    # done and lapping a small set. Take the least recently checked rather
+    # than stalling.
+    return min(pending,
+               key=lambda w: (store.checked.get(w.key) or {}).get("at") or "")
 
 
 def focus_pending(windows: Sequence, store: "SweepStore",
@@ -1253,7 +1346,9 @@ def sweep_batch(
                       and not (freshness_turn and hot_now))
         if focus_turn:
             store.focus_done_logged = False
-            w = pending[0]
+            w = focus_next(pending, store)
+            if w is None:
+                w = pending[0]
             if w.key in store.suspect:
                 store.suspect.remove(w.key)
             replay = True               # freezes the cold cursor

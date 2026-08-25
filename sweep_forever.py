@@ -285,10 +285,13 @@ def main() -> int:
             while True:
                 snap = SweepStore.load(args.store)
                 if started is None:
-                    started = (datetime.now(timezone.utc), snap.cursor)
+                    started = (datetime.now(timezone.utc), snap.cursor,
+                               len(focus_pending(windows, snap, focus_months))
+                               if focus_months else 0)
                 lines = watch_lines(windows, snap,
                                     threshold=prefs.good_price_usd,
-                                    delay_s=args.delay, started=started)
+                                    delay_s=args.delay, started=started,
+                                    focus_months=focus_months)
                 # Home the cursor and clear so the block refreshes in
                 # place. Harmless where it is ignored: the block just
                 # repeats instead.
