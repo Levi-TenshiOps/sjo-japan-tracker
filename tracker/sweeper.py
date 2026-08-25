@@ -46,6 +46,7 @@ from typing import Callable, Iterable, Sequence
 
 from . import gate
 from . import history as history_mod
+from . import airports as airports_mod
 from .browser import (
     BrowserOption, chrome_path, claimed_result_count, dom_price_order,
     dom_row_count, fetch_dom, parse_options, unreadable_count,
@@ -184,6 +185,9 @@ class SweepStore:
     # fare - a second option at the same price, routing, airline and
     # duration is the same deal - but it inflates the apparent gap.
     rows_deduped: int = 0
+    # {hub: {"n": times seen, "min": cheapest fare lost to it}} for
+    # fares refused only because the hub has never been researched.
+    rejected_unknown: dict = field(default_factory=dict)
     # Of the shortfall windows, how many had Google's rows in
     # ascending price order. If they always are, the rows behind the
     # un-clickable control are the dearest and a shortfall is
@@ -522,6 +526,50 @@ WARM_PAIR_MULTIPLE = 1.15  # a pair qualifies on a fare within this of target
 
 # One clean day, defined so it can be checked rather than felt.
 READY_QUIET_HOURS = 24.0
+
+
+# Enough to see the shape without letting the store grow without bound.
+MAX_REJECTED_HUBS = 60
+
+
+def _note_unresearched(store: "SweepStore", parsed) -> None:
+    """Record fares lost only because a hub has never been looked up.
+
+    `sweep_history.csv` logs what we accept, so the cost of the visa
+    filter has been invisible: a fare refused for a US transit and a fare
+    refused because nobody has researched Orly left exactly the same
+    trace, which is none. The first is refused for ever. The second is a
+    gap in a hand-kept list - Costa Rica has visa-free Schengen access,
+    and CDG is listed while ORY is not, FRA and MUC while BER and HAM are
+    not.
+
+    Nothing here changes what is allowed; `ban_reason` still fails closed
+    and `BANNED_AIRPORTS` is untouched. This only makes the cost
+    measurable, so adding a hub can be an evidence-based decision rather
+    than a guess - and so that if none of these hubs ever carries a
+    cheaper fare, that is known too.
+    """
+    for opt in parsed:
+        if opt.visa_ok:
+            continue
+        codes = [c.upper() for c in opt.stops]
+        # If anything on the itinerary is refused outright, researching the
+        # rest would not recover this fare.
+        if any(airports_mod.ban_reason(c) and not airports_mod.is_unresearched(c)
+               for c in codes):
+            continue
+        unknown = [c for c in codes if airports_mod.is_unresearched(c)]
+        if not unknown:
+            continue
+        for code in unknown:
+            rec = store.rejected_unknown.get(code)
+            if rec is None:
+                if len(store.rejected_unknown) >= MAX_REJECTED_HUBS:
+                    continue
+                rec = {"n": 0, "min": opt.price_usd}
+                store.rejected_unknown[code] = rec
+            rec["n"] = int(rec.get("n", 0)) + 1
+            rec["min"] = min(int(rec.get("min", opt.price_usd)), opt.price_usd)
 
 
 def readiness_report(store: "SweepStore", *, throttle_state, hours_since_email,
@@ -1084,6 +1132,7 @@ def sweep_batch(
                                stats=stats)
         options = [o for o in parsed
                    if o.visa_ok and within_duration(o, max_total_hours)]
+        _note_unresearched(store, parsed)
         claimed = claimed_result_count(dom)
         if claimed is not None and claimed > len(parsed):
             store.shortfalls += 1

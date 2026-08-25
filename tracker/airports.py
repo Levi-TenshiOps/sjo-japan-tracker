@@ -191,6 +191,11 @@ KNOWN_AIRPORTS: frozenset[str] = frozenset(
 )
 
 
+UNRESEARCHED_REASON = ("not a researched connection, so its transit-visa "
+                       "rules are unverified - add it to HUBS if it is "
+                       "genuinely visa-free")
+
+
 def ban_reason(code: str) -> str | None:
     """Why this airport is disallowed, or None if it is fine.
 
@@ -216,9 +221,29 @@ def ban_reason(code: str) -> str | None:
         if code in group:
             return reason
     if code not in KNOWN_AIRPORTS:
-        return ("not a researched connection, so its transit-visa rules are "
-                "unverified - add it to HUBS if it is genuinely visa-free")
+        return UNRESEARCHED_REASON
     return None
+
+
+def is_unresearched(code: str) -> bool:
+    """True when a code is refused only for want of research.
+
+    The distinction is the whole point of recording it. A US or Canadian
+    hub is refused for ever and there is nothing to learn. A hub that is
+    merely *unlisted* may be perfectly legal - Costa Rica has visa-free
+    Schengen access, yet CDG is on the list and Orly is not, and Frankfurt
+    and Munich are on it while Berlin and Hamburg are not. Immigration is
+    national; the allow list is per-airport, and that gap costs fares.
+
+    Nothing here changes what is allowed. It only separates "refused for
+    ever" from "refused until somebody looks it up", so the cost of the
+    second can be measured instead of guessed at.
+    """
+    code = code.upper()
+    for group in BAN_REASONS:
+        if code in group:
+            return False
+    return code not in KNOWN_AIRPORTS
 
 
 def is_banned(code: str) -> bool:

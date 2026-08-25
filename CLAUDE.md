@@ -1265,6 +1265,51 @@ claiming a recovery it has not measured.
 and a closing message, the closing one must be tied to the *same* event -
 not to whatever state happens to be set when it fires.
 
+## The visa filter is per-airport, but immigration is per-country
+
+The largest remaining source of missed cheap fares, found 2026-08-24 while
+scanning for exactly that.
+
+`ban_reason` fails closed - an unrecognised code is refused - and that is
+right, and must stay. It was added because a pure deny list treated 50 real
+US and Canadian airports as visa-free, Anchorage among them. **Do not
+change that.**
+
+What it exposes is that the *allow* list is a hand-kept list of individual
+airports, while a passport is admitted by a country. Run against a list of
+plausible connecting hubs:
+
+    Schengen                21 of 42 refused
+    Europe, non-Schengen     8 of 10 refused
+    Latin America            7 of 18 refused
+    Japan domestic           3 of  7 refused
+
+The refusals include **ORY while CDG is allowed**, **BER, HAM and STR while
+FRA, MUC and DUS are allowed**, VLC beside MAD and BCN, and OPO beside LIS.
+Orly and Charles de Gaulle are the same country and the same immigration.
+That is not a safety position; it is a gap in a list.
+
+Also refused: KEF, BUD, OTP, SOF, ZAG, LJU, TLL, RIX, VNO, KRK - every one
+of them in the Schengen area a Costa Rican may enter without a visa - and
+NGO, FUK, CTS, which are *in Japan*, the destination.
+
+**The cost has never been measurable, which is why this sat unnoticed.**
+`sweep_history.csv` logs what is accepted, so a fare refused for a Miami
+transit and a fare refused because nobody has looked up Orly left the
+identical trace: none.
+
+`store.rejected_unknown` now records the second kind - hub, how often, and
+the cheapest fare lost to it - and `--status` prints it. `is_unresearched`
+separates "refused for ever" from "refused until somebody looks it up".
+Nothing about what is allowed changes; `BANNED_AIRPORTS` is untouched and
+`tests/test_rejected_hubs.py` asserts both.
+
+**Do not add hubs from this list by reasoning.** Let it collect for a day,
+then look at what is actually on offer. If ORY never carries anything under
+the fares already found, the gap costs nothing and the list stays short. If
+it does, that is a researched addition with a tier and a test, per
+non-negotiable #1.
+
 ## Layout
 
 ```

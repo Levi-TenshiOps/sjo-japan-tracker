@@ -258,6 +258,24 @@ def main() -> int:
     if args.status:
         print(store.progress(len(windows)))
         print(store.health())
+        # What the hand-kept allow list is costing. These are fares that
+        # were refused *only* because a hub has never been researched -
+        # not US or Canada, which are refused for ever. Costa Rica has
+        # visa-free Schengen access and the list is per-airport, so CDG is
+        # on it and Orly is not.
+        lost = sorted(store.rejected_unknown.items(),
+                      key=lambda kv: int(kv[1].get("min", 10 ** 9)))
+        if lost:
+            print()
+            print("Fares refused only for want of a researched hub "
+                  "(cheapest first):")
+            for code, rec in lost[:10]:
+                print(f"  {code:5} seen {int(rec.get('n', 0)):4}x  "
+                      f"cheapest ${int(rec.get('min', 0)):,}")
+            print("  Nothing is allowed or blocked by this list; it is a "
+                  "measurement.")
+            print("  Add a hub to airports.HUBS only with a researched "
+                  "tier and a test.")
         best = store.best(limit=15, threshold=None)
         if not best:
             print("No findings yet.")
