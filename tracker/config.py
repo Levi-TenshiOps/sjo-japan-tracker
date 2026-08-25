@@ -94,6 +94,11 @@ class Config:
     chrome_verify: bool = True
     chrome_path: str = ""              # blank = autodetect
     chrome_max_per_run: int = 20
+    # Do not re-verify a window the background sweep priced this recently.
+    # Its price is already folded into the email with a "checked N hr ago"
+    # label, and a Chrome launch is the most expensive request made here.
+    # 0 disables the skip and verifies everything, as before.
+    chrome_skip_if_swept_hours: float = 3.0
     chrome_timeout_s: int = 120
     chrome_budget_ms: int = 30000
 

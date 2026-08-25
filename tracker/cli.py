@@ -238,6 +238,23 @@ def run_looks_blocked(*, chrome_attempts: int, chrome_blank: int,
     return grid_empty / grid_requests >= BLOCKED_GRID_RATE
 
 
+def _recently_swept(cfg) -> set[str]:
+    """Window keys the background sweep has priced recently enough to trust.
+
+    A missing or unreadable store simply means the sweep is not running, in
+    which case nothing is skipped and the run behaves exactly as before.
+    """
+    if cfg.chrome_skip_if_swept_hours <= 0:
+        return set()
+    try:
+        store = sweeper.SweepStore.load(cfg.sweep_store)
+        return {d.key for d in store.best(
+            limit=10 ** 6, max_age_hours=cfg.chrome_skip_if_swept_hours)}
+    except Exception as exc:                # noqa: BLE001
+        log.debug("sweep store unreadable (%s); verifying everything", exc)
+        return set()
+
+
 def _send_alarm(content, alarm_cfg) -> None:
     """Best effort. A failed alarm must never cost the trip owner an email."""
     if not alarm_cfg.usable:
@@ -545,6 +562,20 @@ def run(argv: list[str] | None = None) -> int:
     verified: list = []
     chrome_stats: dict = {}
     if cfg.chrome_verify:
+        # Do not spend a launch on a window the sweep has just priced.
+        # Measured 2026-08-24: 53 Chrome launches went to 18 distinct
+        # windows, and nine of them took 44 - four or five checks each,
+        # while the background sweep was re-pricing those same nine every
+        # ~10 hours on its hot tier. Two systems doing the same work, and
+        # a Chrome launch is the most expensive request this project makes.
+        #
+        # The swept price is already folded into `verified` below and
+        # carries its own "checked N hr ago" label, so nothing is lost by
+        # letting it stand. When the sweep is stopped its findings age out
+        # and every window becomes eligible again, which is the right
+        # fallback rather than a special case.
+        fresh_swept = _recently_swept(cfg)
+        skipped_fresh = 0
         targets = verify_mod.choose_targets(
             hint_keys=monthly.hint_window_keys(month_hints),
             hot_keys=hot,
@@ -554,6 +585,18 @@ def run(argv: list[str] | None = None) -> int:
             today=datetime.now(CR_TZ).date(),
             min_lead_days=prefs.min_lead_days,
         )
+        if fresh_swept:
+            kept = [t for t in targets if t.key not in fresh_swept]
+            # Never thin the sample below what `run_looks_blocked` needs to
+            # tell a blackout from a quiet run; three launches is its floor.
+            if len(kept) >= BLOCKED_MIN_CHROME:
+                skipped_fresh = len(targets) - len(kept)
+                targets = kept
+            if skipped_fresh:
+                log.info("Skipping %d window(s) the sweep priced within "
+                         "%.0fh; %d launch(es) left to spend",
+                         skipped_fresh, cfg.chrome_skip_if_swept_hours,
+                         len(targets))
         with gate.google("run:chrome", path=cfg.google_lock):
             verified = verify_mod.verify(
                 targets,

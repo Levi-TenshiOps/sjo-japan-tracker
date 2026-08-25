@@ -1310,6 +1310,48 @@ the fares already found, the gap costs nothing and the list stays short. If
 it does, that is a researched addition with a tier and a test, per
 non-negotiable #1.
 
+## Making the three collectors efficient without asking Google for more
+
+Audited 2026-08-24 on the trip owner's request. The rule throughout: an
+improvement that costs extra requests is not an improvement here.
+
+**The wide net was asking about dates that had been excluded.** "March 16
+to March 31 2027" holds *zero* searchable departure days -
+`whole_trip_in_searched_months` drops every late-March departure because it
+comes home in April - and it was asked six times a day, for ever. Six
+wasted requests a day, and worse: a hint that came back would go to the
+front of the hot list and buy a Chrome launch for a trip nobody would take.
+`month_halves` now takes the real departure dates and skips a half with
+none of them.
+
+Separately, and this is the third appearance of the same defect: **asking
+about the right range does not mean the answer is in it.** Google answers a
+month query with whatever window it likes. Hints are now filtered against
+the searchable window set before reaching the hot list, in the same spirit
+as `itinerary.validate()` re-checking the visa after Google's own
+`connecting_airports` filter.
+
+**Chrome was verifying what the sweep had just priced.** Measured over one
+day: 53 launches, 18 distinct windows, and *nine* of those took 44 of the
+53 - four or five checks each. Meanwhile the sweep's hot tier was
+re-pricing those same nine every ~10 hours. Two systems doing identical
+work, on the most expensive request the project makes.
+
+`chrome_skip_if_swept_hours` (3.0) drops a target the sweep has priced
+that recently. Nothing is lost: the swept price is already folded into the
+email and carries its own "checked N hr ago" label. A stopped sweep ages
+its findings out and everything becomes eligible again, which is the right
+fallback rather than a special case. Set it to 0 to verify everything.
+
+One guard rail: the skip never thins the sample below `BLOCKED_MIN_CHROME`
+(3), because `run_looks_blocked` cannot tell a blackout from a quiet run on
+fewer than three launches. Saving requests must not cost the alarm.
+
+**What none of this does is raise the request count**, which is the whole
+point. The freed launches are available to `hot_list_size` if and when that
+is raised - see "Chrome does not spend its budget" - so the two changes
+compose instead of stacking traffic.
+
 ## Layout
 
 ```
