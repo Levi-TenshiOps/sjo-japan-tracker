@@ -53,7 +53,8 @@ from tracker.preferences import Preferences, PreferencesError  # noqa: E402
 from tracker.schedule import generate_windows     # noqa: E402
 from tracker.sweeper import (                     # noqa: E402
     DEFAULT_STORE, RECHECK_EVERY, Discovery, SweepStore, coverage_report,
-    queue_unverified, readiness_report, sweep_batch, sweep_order,
+    focus_pending, queue_unverified, readiness_report, sweep_batch,
+    sweep_order,
     unverified_windows, watch_lines,
 )
 
@@ -153,6 +154,11 @@ def build_args() -> argparse.Namespace:
     p.add_argument("--coverage", action="store_true",
                    help="how often each kind of window is revisited, and what "
                         "length of price drop that catches")
+    p.add_argument("--focus", default=None, metavar="MONTHS",
+                   help="finish these departure months before the rest, "
+                        "e.g. --focus 1,2,3 for January then February then "
+                        "March. 'none' clears it for this run. Redirects "
+                        "effort; never raises the request rate.")
     p.add_argument("--watch", nargs="?", type=float, const=30.0,
                    default=None, metavar="SECONDS",
                    help="live progress, refreshing every SECONDS (default "
@@ -201,6 +207,22 @@ def main() -> int:
     cfg = config_mod.load(args.config)
 
     windows = sweep_order(generate_windows(prefs, today=Date.today()))
+
+    # --focus overrides the config for this run; "none" turns it off.
+    focus_months = list(cfg.sweep_focus_months or [])
+    if args.focus is not None:
+        if args.focus.strip().lower() in ("none", "off", ""):
+            focus_months = []
+        else:
+            try:
+                focus_months = [int(x) for x in args.focus.split(",") if x.strip()]
+            except ValueError:
+                log.error("--focus wants month numbers, e.g. --focus 1,2,3")
+                return 2
+    bad = [m for m in focus_months if not 1 <= m <= 12]
+    if bad:
+        log.error("--focus month(s) out of range: %s", bad)
+        return 2
     store = SweepStore.load(args.store)
 
     # Prune on the way in, not only at batch boundaries. `prune` runs after
@@ -393,6 +415,13 @@ def main() -> int:
                     "starts blocking. Run setup_email.py to fix that.")
     else:
         log.info("Throttle alarms will be emailed to %s", alarm_cfg.to_addr)
+    if focus_months:
+        from tracker.preferences import MONTH_NAMES as _NAMES
+        names = ", ".join(_NAMES[m] for m in focus_months if m in _NAMES)
+        pend = focus_pending(windows, store, focus_months)
+        log.info("FOCUS: finishing %s before the rest - %d window(s) still "
+                 "without a trusted answer. The cold rotation is paused at "
+                 "%d and resumes after.", names, len(pend), store.cursor)
 
     def raise_alarm(kind: str, facts: dict) -> None:
         """Best effort. A failed alarm must never stop the sweep."""
@@ -423,6 +452,7 @@ def main() -> int:
                 origin=cfg.origins[0], destination=cfg.chrome_destination,
                 max_stops=cfg.max_stops, batch=args.batch,
                 max_total_hours=cfg.max_total_hours,
+                focus_months=focus_months,
                 chrome_override=cfg.chrome_path, timeout_s=cfg.chrome_timeout_s,
                 budget_ms=cfg.chrome_budget_ms, delay_s=args.delay,
                 on_find=announce, history_csv=cfg.sweep_history_csv,

@@ -41,6 +41,11 @@ class Config:
     # 509 grid fares at <=30 nights, zero at >=31. Chrome is unaffected and
     # still prices them. 0 disables the skip.
     http_max_nights: int = 30
+    # Finish these departure months before spending anything on the rest.
+    # Empty = no focus. It redirects the sweep's effort; it never raises
+    # the request rate. The cold rotation is frozen while a focus is on and
+    # resumes exactly where it stopped.
+    sweep_focus_months: list[int] = field(default_factory=list)
     max_total_hours: int | None = 60
     min_layover_min: int = 75
 

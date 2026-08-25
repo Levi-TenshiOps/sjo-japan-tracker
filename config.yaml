@@ -39,3 +39,8 @@ history_csv: price_history.csv
 state_file: state.json
 throttle_file: throttle.json
 rotation_file: rotation.json
+
+# Finish these departure months before spending anything on the rest.
+# Empty = no focus. Redirects the sweep; never raises the request rate.
+# The cold rotation freezes while a focus is on and resumes after.
+sweep_focus_months: [1, 2, 3]

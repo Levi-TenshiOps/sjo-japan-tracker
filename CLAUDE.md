@@ -1399,6 +1399,63 @@ visa filter in the ledger, and here it is a known limit of the fetch
 method. Before reading an empty rate as pressure from Google, check what
 was actually asked.
 
+## Focus: finish the months that matter before the rest
+
+Asked for 2026-08-24. The trip owner wants January, February and March to
+**100%** before anything is spent on October to December - and wants to be
+able to do the same on demand, for a day like the Labor Day sales.
+
+**"100%" is not "the cursor has walked past it."** After the first pass
+every one of the 1,089 January-March windows had been visited, and only
+266 of them had a fare. The other ~720 returned nothing *while the
+connection was in doubt*, so their "no fares" verdict was never
+trustworthy. `focus_pending` counts a window answered when it has a fare
+or an empty result recorded while healthy; everything else is still an
+open question. That is the backlog a focus exists to close.
+
+    sweep_focus_months: [1, 2, 3]     # config.yaml, persistent
+    python sweep_forever.py --focus 1,2,3    # one run
+    python sweep_forever.py --focus none     # clear it for one run
+
+Order is the order given, so `[1, 2, 3]` really does finish January before
+starting February.
+
+**The design constraint that shaped everything: a focus redirects effort,
+it never asks for more of it.** The request rate is untouched. That is the
+only kind of "go faster" that is safe on this address, and it is why a
+focus is the right answer to "there will be deals that day" rather than
+dropping `--delay`.
+
+Two details worth keeping:
+
+* **The cold cursor freezes rather than skipping.** Walking it past the
+  deferred months would leave those windows behind the cursor with no
+  answer - in none of the four coverage states, i.e. silently written off,
+  the one outcome the store exists to prevent. Freezing means October to
+  December resume exactly where they stopped.
+* **One launch in `FOCUS_HOT_EVERY` (5) still goes to the hot list**, and
+  only when a hot window actually exists. The cheapest known fare is what
+  the email is built on, and letting it go stale to finish a backfill
+  sooner is a bad trade at any speed. Without the "actually exists" check
+  `next_window` falls back to the cold cursor, which creeps forward
+  through the very months being deferred.
+
+**Do not implement this by narrowing `included_months`.** It looks
+equivalent and is not: a re-check key whose window is no longer in the
+list is *dropped* (`dropped_rechecks`), so narrowing to [1, 2, 3] would
+have silently discarded the ~600 queued October and November windows.
+
+The focus reports itself at startup and says so once when it completes,
+so it can never be a silent mode:
+
+    FOCUS: finishing January, February, March before the rest - 719
+    window(s) still without a trusted answer. The cold rotation is paused
+    at 1905 and resumes after.
+
+At ~900 launches a day, 719 windows is well under a day - against ~11 days
+had they drained at the ordinary one-in-eight re-check share, mixed in
+with October's 521.
+
 ## Layout
 
 ```

@@ -188,6 +188,9 @@ class SweepStore:
     # {hub: {"n": times seen, "min": cheapest fare lost to it}} for
     # fares refused only because the hub has never been researched.
     rejected_unknown: dict = field(default_factory=dict)
+    # Whether "focus complete" has already been said, so it is said
+    # once rather than on every launch afterwards.
+    focus_done_logged: bool = False
     # Of the shortfall windows, how many had Google's rows in
     # ascending price order. If they always are, the rows behind the
     # un-clickable control are the dearest and a shortfall is
@@ -829,6 +832,41 @@ def promising_weekday_pairs(store: "SweepStore", *, threshold: int | None,
     return pairs
 
 
+# While a focus is active, one launch in this many still goes to the hot
+# list. Freshness of the cheapest known fare is the thing the email is
+# built on, and letting it go stale to finish a backfill sooner is a bad
+# trade at any speed.
+FOCUS_HOT_EVERY = 5
+
+
+def focus_pending(windows: Sequence, store: "SweepStore",
+                  months: Sequence[int]) -> list:
+    """Windows in the focus months with no trustworthy answer yet.
+
+    "100% of January" is not "January has been walked". A window counts as
+    answered when it has a fare, or an empty result recorded while the
+    connection was healthy. Anything else - never walked, or emptied while
+    the connection was in doubt - is still an open question, and those are
+    exactly the windows a focus exists to close.
+
+    Ordered by the caller's month order first, then by date, so asking for
+    [1, 2, 3] really does finish January before starting February.
+    """
+    rank = {m: i for i, m in enumerate(months)}
+    out = []
+    for w in windows:
+        i = rank.get(w.depart.month)
+        if i is None:
+            continue
+        if w.key in store.found:
+            continue
+        if store.checked.get(w.key, {}).get("healthy"):
+            continue
+        out.append((i, w.depart, w.back, w))
+    out.sort(key=lambda t: (t[0], t[1], t[2]))
+    return [t[3] for t in out]
+
+
 def next_window(windows: Sequence, store: "SweepStore", *,
                 threshold: int | None = None, hot_share: float = HOT_SHARE,
                 warm_share: float = WARM_SHARE):
@@ -1082,6 +1120,7 @@ def sweep_batch(
     destination: str = "TYO",
     max_stops: int | None = 2,
     max_total_hours: int | None = None,
+    focus_months: Sequence[int] = (),
     batch: int = 10,
     chrome: str | None = None,
     chrome_override: str = "",
@@ -1145,8 +1184,47 @@ def sweep_batch(
         # another.
         healthy = not looks_throttled(store.recent,
                                       blank=store.recent_blank)
+
+        # A focus finishes the months that matter before spending anything
+        # on the rest. It redirects effort; it never asks for more of it,
+        # which is the only kind of "go faster" that is safe here.
+        #
+        # `replay=True` is what freezes the cold cursor, so the rotation
+        # resumes exactly where it stopped once the focus is done. The
+        # alternative - walking the cursor past months not in focus - would
+        # leave those windows in none of the four coverage states, silently
+        # written off, which is the one outcome this store exists to
+        # prevent.
+        pending = (focus_pending(windows, store, focus_months)
+                   if focus_months else [])
+        if focus_months and not pending and not store.focus_done_logged:
+            log.info("Focus on month(s) %s complete: every window has a fare "
+                     "or a trusted answer. Resuming the full rotation.",
+                     ", ".join(str(m) for m in focus_months))
+            store.focus_done_logged = True
+
         recheck_turn = store.windows_priced % RECHECK_EVERY == 0
-        if store.suspect and healthy and recheck_turn:
+        # One launch in FOCUS_HOT_EVERY still goes to the hot list even
+        # under a focus. The cheapest known fare is what the email is built
+        # on, and letting it go stale to finish a backfill sooner is a bad
+        # trade at any speed.
+        # The freshness launch is only worth taking when there is actually
+        # a hot window to take. Without that check `next_window` falls back
+        # to the cold cursor, which creeps forward through the very months
+        # the focus is deferring - and those windows would then be behind
+        # the cursor with no answer, i.e. silently written off.
+        freshness_turn = store.windows_priced % FOCUS_HOT_EVERY == 0
+        hot_now = bool(hot_keys(store, threshold=hot_threshold))
+        focus_turn = (pending and healthy
+                      and not (freshness_turn and hot_now))
+        if focus_turn:
+            store.focus_done_logged = False
+            w = pending[0]
+            if w.key in store.suspect:
+                store.suspect.remove(w.key)
+            replay = True               # freezes the cold cursor
+            is_recheck = True
+        elif store.suspect and healthy and recheck_turn and not pending:
             key = store.suspect.pop(0)
             w = next((x for x in windows if x.key == key), None)
             if w is None:
@@ -1167,11 +1245,19 @@ def sweep_batch(
             # cold cursor, or coverage would stall on the cheap ones.
             # Spend only what freshness actually requires; the rest goes
             # on coverage. `hot_share` is the ceiling, not the setting.
-            share = needed_hot_share(
-                len(hot_keys(store, threshold=hot_threshold)),
-                cycle_s=delay_s + LAUNCH_SECONDS, cap=hot_share)
-            w, was_hot = next_window(windows, store, threshold=hot_threshold,
-                                     hot_share=share)
+            if pending:
+                # The focus's freshness launch: hot only, never cold, or
+                # the cursor would creep through months being deferred.
+                w, was_hot = next_window(windows, store,
+                                         threshold=hot_threshold,
+                                         hot_share=1.0, warm_share=0.0)
+            else:
+                share = needed_hot_share(
+                    len(hot_keys(store, threshold=hot_threshold)),
+                    cycle_s=delay_s + LAUNCH_SECONDS, cap=hot_share)
+                w, was_hot = next_window(windows, store,
+                                         threshold=hot_threshold,
+                                         hot_share=share)
             if w is None:
                 break
             replay = was_hot
