@@ -713,8 +713,18 @@ def run(argv: list[str] | None = None) -> int:
         # history too - otherwise the hot list only ever learns the
         # inflated HTTP numbers and keeps re-pricing the wrong windows.
         rows += history.rows_from_verified(verified, band_of=bands.classify)
-        log.info("Logged %d row(s) (%d from Chrome)",
-                 history.append(cfg.history_csv, rows), len(verified))
+        # Best effort, like the sweep's identical call. This runs *before*
+        # the email, so an unguarded write here means a locked or full disk
+        # costs the trip owner the thing they actually receive - and on
+        # Windows the file is read by other processes constantly, so a
+        # transient PermissionError is not exotic. Losing a few history
+        # rows is a rounding error against losing the email.
+        try:
+            written = history.append(cfg.history_csv, rows)
+            log.info("Logged %d row(s) (%d from Chrome)", written, len(verified))
+        except OSError as exc:
+            log.warning("could not write %s (%s); the email is unaffected",
+                        cfg.history_csv, exc)
 
     qualifying = [i for i in accepted if i.price_usd <= cfg.good_price_usd]
     # The fare the email is *about*. Normally the cheapest one clearing the

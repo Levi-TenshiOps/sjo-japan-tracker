@@ -97,3 +97,51 @@ class TestAWholeRunCompletes:
                  "-p", workspace["prefs"], "-c", workspace["config"]])
         assert "departures" in seen, "the wide net lost its date filter"
         assert seen["departures"], "the filter was passed but empty"
+
+
+class TestNothingBetweenTheSearchAndTheEmailMayRaise:
+    """Everything after the search and before the send is best-effort.
+
+    That stretch has now cost the trip owner an email twice: a torn CSV
+    read on 2026-08-24, and a crash on the throttle alarm the same day.
+    Writing the history is the third thing in it - and on Windows the file
+    is read by other processes constantly, so a transient PermissionError
+    is ordinary rather than exotic.
+    """
+
+    def _src(self):
+        import pathlib
+        return (pathlib.Path(__file__).resolve().parent.parent
+                / "tracker" / "cli.py").read_text(encoding="utf-8")
+
+    def test_the_history_write_is_guarded(self):
+        src = self._src()
+        i = src.find("history.append(cfg.history_csv")
+        assert i > 0, "the history write is gone"
+        assert "try:" in src[max(0, i - 400):i], "the history write can raise"
+        assert "the email is unaffected" in src[i:i + 400]
+
+    def test_the_block_alarm_is_guarded(self):
+        src = self._src()
+        i = src.find("\n        _raise_block_alarm(")
+        assert i > 0 and "block alarm failed" in src[i:i + 500]
+
+    def test_the_sweep_store_read_is_guarded(self):
+        src = self._src()
+        i = src.find("sweeper.SweepStore.load(cfg.sweep_store)")
+        assert i > 0
+        assert "except" in src[i:i + 400], "a missing sweep store could raise"
+
+    def test_a_failing_history_write_still_sends(self, workspace, monkeypatch):
+        """The behaviour, not just the shape."""
+        import io as _io
+        from tracker import cli, history
+
+        def boom(*a, **k):
+            raise PermissionError("file is open in another process")
+
+        monkeypatch.setattr(history, "append", boom)
+        _fake_everything(monkeypatch, dom=_io.open(FIXTURE, encoding="utf-8").read())
+        code = cli.run(["--dry-run", "-p", workspace["prefs"],
+                        "-c", workspace["config"]])
+        assert code == 0, "a failed history write killed the run"
