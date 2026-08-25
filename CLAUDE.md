@@ -1761,6 +1761,49 @@ other.** The sweep reports the scheduled runs falling silent; the scheduled
 runs report the sweep dying and the parser going blind. Anything that can
 only be detected by the component it kills needs the other one to say it.
 
+## The alerting, audited end to end
+
+Checked 2026-08-25 by enumerating failure modes rather than by reading the
+code that exists. Five reach the trip owner:
+
+    Google throttles the sweep        sweep_forever, backs off too
+    Google dark on a scheduled run    run_looks_blocked, both channels
+    The sweep stops                   _watch_the_sweep, 3-6 h
+    Results become unreadable         _watch_the_sweep, markup changed
+    Emails stop arriving              silence watchdog, 16 h
+
+The latency on "the sweep stops" is 3-6 hours rather than 3: it needs
+`SWEEP_IDLE_HOURS` of idleness *and* the next scheduled run to come round,
+and those are ~3.4 h apart.
+
+**Two are deliberately not covered, and saying so is the point.**
+
+*Email delivery failing.* You cannot be emailed that email is broken. A
+failed send exits non-zero and retries on the next run. `ntfy_topic` gives
+a second channel if it is ever wanted; it is not configured here.
+
+*A single scheduled run crashing.* `cli.main` logs a traceback and exits
+non-zero, but nothing emails - only the 16-hour silence watchdog catches a
+run that has stopped sending, and only once *every* run has. A one-off
+crash is visible in `tracker.log` and not in the inbox. That is the
+documented safety net rather than an oversight, and it is what eventually
+surfaced the four-hour outage on 2026-08-24.
+
+*A corrupt sweep store* was considered and declined. `SweepStore.save` is
+`tempfile` + `os.replace`, so a torn write cannot produce one; it would
+take disk-level damage. A fifth alarm for that is more noise than value,
+and this project has already paid twice for alarms that fire on rare
+conditions.
+
+### The bug the audit found
+
+`headline_pick` became optional on 2026-08-25 when the HTTP grid lost its
+veto over the email - and the ntfy push block still dereferenced it three
+times. Latent rather than live, because `ntfy_topic` is empty here, but it
+would have crashed the run *after* composing the email and before saving
+the state. Found by grepping every use of the name rather than by testing
+the path, which is the only way to find a crash nobody can trigger yet.
+
 ## Layout
 
 ```

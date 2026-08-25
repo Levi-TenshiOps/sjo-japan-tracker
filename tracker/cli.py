@@ -858,11 +858,22 @@ def run(argv: list[str] | None = None) -> int:
     log.info("Email: %s", result.detail)
 
     if cfg.ntfy_topic:
+        # `headline_pick` is None when the grid found nothing and the email
+        # is carried entirely by Chrome and the sweep - a case that only
+        # became possible on 2026-08-25, when the grid lost its veto. The
+        # push then describes the verified fare instead.
+        if headline_pick is not None:
+            body = (f"{format_price(headline_pick.price_usd)} "
+                    f"{headline_pick.route_label} {headline_pick.outbound_date}")
+            url = headline_pick.deep_link
+        else:
+            top = verified[0]
+            body = (f"{format_price(top.price_usd)} "
+                    f"{top.origin}-{top.destination} {top.depart_date}")
+            url = top.deep_link
         log.info("Push: %s", notify.send_push(
-            cfg.ntfy_topic, title=content.subject,
-            body=f"{format_price(headline_pick.price_usd)} "
-                 f"{headline_pick.route_label} {headline_pick.outbound_date}",
-            url=headline_pick.deep_link, dry_run=args.dry_run).detail)
+            cfg.ntfy_topic, title=content.subject, body=body,
+            url=url, dry_run=args.dry_run).detail)
 
     if result.ok and not args.dry_run:
         alerts.record_sent(

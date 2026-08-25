@@ -207,22 +207,34 @@ throttle into an hour-long one. When it looks blocked, stop and wait.
 
 ## When something breaks
 
-Four failures, all of which email you:
+**Five failures email you:**
 
 | What happened | How you find out |
 |---|---|
 | Google throttles the sweep | email, and it backs off on its own |
 | Google goes dark on a scheduled run | email, when *both* search methods return nothing |
-| The sweep stops | email from the next scheduled run |
+| The sweep stops | email from the next scheduled run, 3–6 h |
 | Results become unreadable | email — Google's markup has changed |
-| Your emails stop arriving | email from the sweep's watchdog |
+| Your emails stop arriving | email from the sweep, after 16 h of silence |
 
-The two halves watch each other: the sweep reports the scheduled runs
-falling silent, and the scheduled runs report the sweep dying. Neither can
-announce its own death.
+The two halves watch each other, because neither can announce its own
+death: the sweep reports the scheduled runs falling silent, and the
+scheduled runs report the sweep dying and the parser going blind.
 
 Alerts are sent once, not once per run, and clear themselves when the
 condition does.
+
+**And two that it will not email you about**, stated plainly because
+knowing the edge of the net matters more than the net:
+
+- **Email delivery itself failing.** You cannot be emailed that email is
+  broken. A run that fails to send exits non-zero and retries next time;
+  if you want a second channel, set `ntfy_topic` in `config.yaml` for
+  phone push.
+- **A single scheduled run crashing.** It logs a full traceback to
+  `tracker.log` and exits non-zero. Only if *every* run stops sending does
+  the 16-hour silence watchdog fire — so a one-off crash is visible in the
+  log, not in your inbox.
 
 ## Files
 

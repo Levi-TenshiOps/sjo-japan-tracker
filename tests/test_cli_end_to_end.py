@@ -204,3 +204,37 @@ class TestTheWeakestSourceHasNoVeto:
         with _pytest.raises(ValueError):
             email_render.render([], bands, threshold=1400, is_great=False,
                                 generated_at="now", verified=[])
+
+
+class TestThePushNotificationSurvivesAnEmptyGrid:
+    """`headline_pick` became optional when the grid lost its veto.
+
+    Latent rather than live - it needs `ntfy_topic` configured, and it is
+    not here - but it would have crashed the run *after* the email was
+    composed and before the state was saved.
+    """
+
+    def test_the_push_body_handles_a_missing_grid_pick(self):
+        import pathlib
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "tracker" / "cli.py").read_text(encoding="utf-8")
+        i = src.find("if cfg.ntfy_topic:")
+        assert i > 0
+        block = src[i:i + 900]
+        assert "if headline_pick is not None:" in block, (
+            "the push still assumes the grid found something")
+        assert "verified[0]" in block, "no fallback to the verified fare"
+
+    def test_every_headline_pick_use_is_guarded(self):
+        import pathlib
+        import re
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "tracker" / "cli.py").read_text(encoding="utf-8")
+        # Every line dereferencing it must sit under a `is not None` guard.
+        lines = src.splitlines()
+        for n, ln in enumerate(lines):
+            if "headline_pick." not in ln:
+                continue
+            window = "\n".join(lines[max(0, n - 12):n])
+            assert "headline_pick is not None" in window, (
+                f"line {n+1} dereferences headline_pick unguarded: {ln.strip()}")
