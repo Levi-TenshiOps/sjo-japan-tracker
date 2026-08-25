@@ -9,8 +9,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      # v5/v6 run on Node 24. v4/v5 target Node 20, which GitHub has
+      # deprecated and now force-runs on 24 anyway, with a warning on
+      # every job. Pinning the current majors removes the warning and
+      # the forced-runtime surprise.
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: pip
