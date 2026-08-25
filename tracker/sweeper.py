@@ -170,6 +170,11 @@ class SweepStore:
     # those two carry exists to stop re-check *empties* inflating the
     # throttle signal; a success inflates nothing.
     recent_worked: list = field(default_factory=list)
+    # How many times a focus has priced each window. A focus must be able
+    # to finish: without a bound, a window that keeps answering blank on a
+    # connection that cannot be proven stays pending for ever, and the
+    # focus rotates through the same tail indefinitely.
+    focus_tries: dict = field(default_factory=dict)
     # Windows whose "no fares" answer arrived while the connection looked
     # throttled. They are not empty, they are *unverified*, and they stay
     # here until they can be re-checked during a healthy stretch.
@@ -923,6 +928,13 @@ def connection_proven(store: "SweepStore", window: int | None = None) -> bool:
 # guaranteed by rotation, not by the connection signal agreeing.
 FOCUS_COOLDOWN_SECONDS = 900.0
 
+# How many times a focus will price one window before moving on without it.
+# "100%" then means "every window given this many honest attempts", which
+# is reachable - unlike "every window trusted", which is not: a date that
+# is genuinely blank can only be believed once something *else* has
+# returned fares, and if nothing does, nothing ever can.
+FOCUS_MAX_TRIES = 3
+
 
 def focus_next(pending: Sequence, store: "SweepStore", *,
                cooldown_s: float = FOCUS_COOLDOWN_SECONDS,
@@ -967,7 +979,8 @@ def focus_next(pending: Sequence, store: "SweepStore", *,
 
 
 def focus_pending(windows: Sequence, store: "SweepStore",
-                  months: Sequence[int]) -> list:
+                  months: Sequence[int],
+                  max_tries: int = FOCUS_MAX_TRIES) -> list:
     """Windows in the focus months with no trustworthy answer yet.
 
     "100% of January" is not "January has been walked". A window counts as
@@ -988,6 +1001,11 @@ def focus_pending(windows: Sequence, store: "SweepStore",
         if w.key in store.found:
             continue
         if store.checked.get(w.key, {}).get("healthy"):
+            continue
+        # Given a fair number of attempts already. It stays in the ordinary
+        # re-check queue - nothing is written off - but the focus stops
+        # waiting on it, so the focus can actually end.
+        if int(store.focus_tries.get(w.key, 0)) >= max_tries:
             continue
         out.append((i, w.depart, w.back, w))
     out.sort(key=lambda t: (t[0], t[1], t[2]))
@@ -1349,6 +1367,7 @@ def sweep_batch(
             w = focus_next(pending, store)
             if w is None:
                 w = pending[0]
+            store.focus_tries[w.key] = int(store.focus_tries.get(w.key, 0)) + 1
             if w.key in store.suspect:
                 store.suspect.remove(w.key)
             replay = True               # freezes the cold cursor

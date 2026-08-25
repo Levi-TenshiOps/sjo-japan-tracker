@@ -367,3 +367,109 @@ class TestTheWatchShowsFocusProgress:
         text = "\n".join(watch_lines(ws, SweepStore(), threshold=1400))
         assert "FOCUS" not in text
         assert "(paused)" not in text
+
+
+class TestAFocusCanActuallyEnd:
+    """"100% trusted" is not reachable; "100% fairly attempted" is.
+
+    A date that is genuinely blank can only be believed once something
+    *else* has returned fares. If nothing does - a barren stretch with an
+    empty hot list - nothing ever can, and the focus rotates through the
+    same tail for ever. Measured 2026-08-24: 40 blank launches over 30
+    windows left all 30 still pending.
+
+    So a focus gives each window FOCUS_MAX_TRIES honest attempts and then
+    moves on. The window is not written off: it stays in the ordinary
+    re-check queue.
+    """
+
+    def _windows(self, n=5):
+        return [Window(date(2027, 1, 1) + timedelta(days=i),
+                       date(2027, 1, 1) + timedelta(days=i + 21))
+                for i in range(n)]
+
+    def test_an_all_blank_focus_terminates(self):
+        from tracker.sweeper import FOCUS_MAX_TRIES
+        ws = self._windows()
+        s = SweepStore()
+        for i in range(200):
+            if not focus_pending(ws, s, [1]):
+                break
+            sweep_batch(ws, s, batch=1, fetch=lambda u: "",
+                        sleep=lambda _: None, delay_s=0, focus_months=[1])
+        else:
+            raise AssertionError("the focus never ended")
+        assert i <= len(ws) * FOCUS_MAX_TRIES + 2, f"took {i} launches"
+
+    def test_nothing_is_written_off_when_it_gives_up(self):
+        ws = self._windows()
+        s = SweepStore()
+        for _ in range(60):
+            if not focus_pending(ws, s, [1]):
+                break
+            sweep_batch(ws, s, batch=1, fetch=lambda u: "",
+                        sleep=lambda _: None, delay_s=0, focus_months=[1])
+        assert set(s.suspect) == {w.key for w in ws}, (
+            "a window the focus gave up on left the re-check queue too")
+
+    def test_a_window_that_answers_needs_only_one_try(self):
+        ws = self._windows()
+        s = SweepStore()
+        sweep_batch(ws, s, batch=1,
+                    fetch=FakeChrome(_io.open(FIXTURE, encoding="utf-8").read()),
+                    sleep=lambda _: None, delay_s=0, focus_months=[1])
+        assert max(int(v) for v in s.focus_tries.values()) == 1
+
+
+class TestASecondFocusStillDoesWork:
+    """The Labor Day case: run the same focus again on a sale day.
+
+    The attempt counters persist in the store, so without clearing them a
+    second focus finds every window already at the cap and spends zero
+    launches - silently. Measured 2026-08-24 before the fix: 0 launches.
+    """
+
+    def test_the_counters_are_cleared_at_startup_not_on_completion(self):
+        import pathlib
+        import re
+        src = re.sub(r"\s+", " ", (pathlib.Path(__file__).resolve().parent.parent
+                                   / "sweep_forever.py").read_text(encoding="utf-8"))
+        assert "store.focus_tries = {}" in src, "the counters are never cleared"
+        # Clearing on completion would let the focus restart and loop.
+        i = src.find("store.focus_tries = {}")
+        assert "clearing" in src[max(0, i - 400):i]
+
+    def test_clearing_the_counters_makes_the_focus_live_again(self):
+        ws = [Window(date(2027, 1, 1) + timedelta(days=i),
+                     date(2027, 1, 1) + timedelta(days=i + 21))
+              for i in range(4)]
+        s = SweepStore()
+        for _ in range(40):
+            if not focus_pending(ws, s, [1]):
+                break
+            sweep_batch(ws, s, batch=1, fetch=lambda u: "",
+                        sleep=lambda _: None, delay_s=0, focus_months=[1])
+        assert focus_pending(ws, s, [1]) == []
+        s.focus_tries = {}                      # what a restart does
+        assert len(focus_pending(ws, s, [1])) == len(ws)
+
+
+class TestAFocusMonthThatSearchesNothing:
+    """Same trap as a named month the horizon cannot reach."""
+
+    def test_a_month_with_no_windows_yields_no_pending(self):
+        ws = windows_across_months()
+        assert focus_pending(ws, SweepStore(), [6]) == []
+
+    def test_the_run_warns_rather_than_looking_finished(self):
+        import pathlib
+        import re
+        src = re.sub(r"\s+", " ",
+                     (pathlib.Path(__file__).resolve().parent.parent
+                      / "sweep_forever.py").read_text(encoding="utf-8"))
+        # Collapsed whitespace: these are wrapped log strings, and an exact
+        # match would break on a rewrap rather than on the warning going.
+        # Fragments that do not span a string-literal boundary, so a
+        # rewrap cannot break this for a reason unrelated to the warning.
+        assert "are not in the searched window" in src
+        assert "none of the requested months are searched" in src

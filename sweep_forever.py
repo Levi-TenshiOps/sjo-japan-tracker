@@ -421,10 +421,44 @@ def main() -> int:
     if focus_months:
         from tracker.preferences import MONTH_NAMES as _NAMES
         names = ", ".join(_NAMES[m] for m in focus_months if m in _NAMES)
-        pend = focus_pending(windows, store, focus_months)
-        log.info("FOCUS: finishing %s before the rest - %d window(s) still "
-                 "without a trusted answer. The cold rotation is paused at "
-                 "%d and resumes after.", names, len(pend), store.cursor)
+        # A focus month with no windows at all searches nothing, and looks
+        # exactly like a focus that finished instantly. Same trap as a
+        # named month the horizon cannot reach, which this project already
+        # learned to shout about rather than swallow.
+        have = {w.depart.month for w in windows}
+        missing = [m for m in focus_months if m not in have]
+        if missing:
+            log.warning("FOCUS: month(s) %s are not in the searched window "
+                        "list at all, so there is nothing to focus on there. "
+                        "Check included_months in config.yaml.",
+                        ", ".join(_NAMES.get(m, str(m)) for m in missing))
+        if not set(focus_months) & have:
+            log.warning("FOCUS: none of the requested months are searched; "
+                        "carrying on with the ordinary rotation.")
+            focus_months = []
+        else:
+            # Start the attempt counters fresh. They exist so a focus can
+            # end - a window that keeps answering blank is given a fair
+            # number of tries and then left to the ordinary queue - but
+            # they must not make the *next* focus a no-op. Measured
+            # 2026-08-24: without this a second focus on the same months
+            # spent zero launches on them, silently, which is precisely the
+            # "run it again on a sale day" case it was built for.
+            #
+            # Reset at startup rather than on completion: clearing them the
+            # moment a focus finishes would let it immediately restart and
+            # loop for ever, and restarting the sweep is how a focus gets
+            # asked for again anyway.
+            if store.focus_tries:
+                log.info("FOCUS: clearing %d attempt counter(s) from a "
+                         "previous focus.", len(store.focus_tries))
+                store.focus_tries = {}
+                store.save(args.store)
+            pend = focus_pending(windows, store, focus_months)
+            log.info("FOCUS: finishing %s before the rest - %d window(s) "
+                     "still without a trusted answer. The cold rotation is "
+                     "paused at %d and resumes after.",
+                     names, len(pend), store.cursor)
 
     def raise_alarm(kind: str, facts: dict) -> None:
         """Best effort. A failed alarm must never stop the sweep."""
