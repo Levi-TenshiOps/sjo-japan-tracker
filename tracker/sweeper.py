@@ -484,9 +484,25 @@ def hot_keys(store: "SweepStore", *, threshold: int | None = None,
     return [k for p, k in sorted(priced) if p <= ceiling]
 
 
-# A Chrome launch that renders a real result page, measured on this machine.
-# Used to turn a delay into a launch rate.
-LAUNCH_SECONDS = 6.1
+# What a Chrome launch actually costs, measured on this machine. Used to
+# turn a delay into a launch rate, which is what `needed_hot_share` divides
+# freshness by.
+#
+# Re-measured 2026-08-25 across 342 timed checks: median 12.1s, mean 13.8s.
+# The constant said 6.1, from an early sample taken when a page rendered in
+# about six seconds - whatever changed since (machine, network, Chrome,
+# Google), it is now more than twice that.
+#
+# The **mean** is the right statistic here, not the median: this converts a
+# delay into throughput, and total time is launches x mean.
+#
+# The error was not harmless and got worse when the rate went up, because a
+# fixed launch cost is a larger share of a shorter cycle. Believing 6.1s at
+# a 40s delay claims 78 launches an hour where there are 67, so the derived
+# hot share under-delivers - 7.9 refreshes an hour against the 8.9 the
+# 10-hour freshness target needs. Erring high is the safe direction: it
+# overestimates the cycle, so it buys more freshness than asked for.
+LAUNCH_SECONDS = 14.0
 # A swept price older than this is dropped from the email (config's
 # `sweep_max_age_hours`), so it is exactly how fresh a hot window must be.
 HOT_FRESHNESS_HOURS = 10.0
