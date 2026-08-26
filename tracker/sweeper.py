@@ -684,6 +684,7 @@ def watch_lines(windows: Sequence, store: "SweepStore", *,
                 threshold: int | None, delay_s: float = 90.0,
                 started: tuple | None = None,
                 focus_months: Sequence[int] = (),
+                focus_max_age_hours: float | None = None,
                 now: datetime | None = None) -> list[str]:
     """A compact live view of the sweep, for `--watch`.
 
@@ -707,7 +708,9 @@ def watch_lines(windows: Sequence, store: "SweepStore", *,
     # While a focus is on, the cold cursor is deliberately frozen - so
     # leading with it would show a bar that does not move for a day, which
     # reads as a stalled sweep. Show the work actually being done.
-    pending = focus_pending(windows, store, focus_months) if focus_months else []
+    pending = (focus_pending(windows, store, focus_months,
+                             max_age_hours=focus_max_age_hours)
+               if focus_months else [])
     if focus_months:
         names = ", ".join(_MONTH_LABEL.get(m, str(m)) for m in focus_months)
         if pending:
@@ -1231,7 +1234,9 @@ def focus_next(pending: Sequence, store: "SweepStore", *,
 
 def focus_pending(windows: Sequence, store: "SweepStore",
                   months: Sequence[int],
-                  max_tries: int = FOCUS_MAX_TRIES) -> list:
+                  max_tries: int = FOCUS_MAX_TRIES,
+                  max_age_hours: float | None = None,
+                  now: datetime | None = None) -> list:
     """Windows in the focus months with no trustworthy answer yet.
 
     "100% of January" is not "January has been walked". A window counts as
@@ -1242,16 +1247,40 @@ def focus_pending(windows: Sequence, store: "SweepStore",
 
     Ordered by the caller's month order first, then by date, so asking for
     [1, 2, 3] really does finish January before starting February.
+
+    `max_age_hours` turns it from a backfill into a refresh, and that is
+    the difference between the focus doing something on a sale day and
+    doing nothing at all. Measured 2026-08-26: every one of the 1,089
+    January-March windows had a trusted answer, so `--focus 1,2,3` would
+    have reported "complete" and returned to the rotation - while 400 of
+    those answers were over a day old and the oldest was 3.5 days. An
+    answer is a fact about a moment; on the day of a sale the moment is
+    what matters. With `max_age_hours` set, an answer older than that
+    stops counting and the window is priced again.
     """
     rank = {m: i for i, m in enumerate(months)}
     out = []
+    now = now or datetime.now(timezone.utc)
     for w in windows:
         i = rank.get(w.depart.month)
         if i is None:
             continue
-        if w.key in store.found:
+        rec = _checked_rec(store, w.key)
+        stale = False
+        if max_age_hours is not None:
+            at = rec.get("at") or ""
+            if not at:
+                stale = True
+            else:
+                try:
+                    age = (now - datetime.fromisoformat(at)).total_seconds() / 3600.0
+                except ValueError:
+                    stale = True
+                else:
+                    stale = age > max_age_hours
+        if not stale and w.key in store.found:
             continue
-        if _checked_rec(store, w.key).get("healthy"):
+        if not stale and rec.get("healthy"):
             continue
         # Given a fair number of attempts already. It stays in the ordinary
         # re-check queue - nothing is written off - but the focus stops
@@ -1526,6 +1555,11 @@ def sweep_batch(
     max_stops: int | None = 2,
     max_total_hours: int | None = None,
     focus_months: Sequence[int] = (),
+    #: When set, a focus month's answer counts as stale past this many
+    #: hours and the window is priced again. Without it a focus only
+    #: backfills, and on a route whose windows all already have answers
+    #: that means it does nothing at all.
+    focus_max_age_hours: float | None = None,
     batch: int = 10,
     chrome: str | None = None,
     chrome_override: str = "",
@@ -1630,7 +1664,8 @@ def sweep_batch(
         #
         # Restarting the sweep is how a focus is asked for again, and the
         # startup path clears both this flag and the attempt counters.
-        pending = (focus_pending(windows, store, focus_months)
+        pending = (focus_pending(windows, store, focus_months,
+                                 max_age_hours=focus_max_age_hours)
                    if focus_months and not store.focus_done_logged else [])
         if focus_months and not pending and not store.focus_done_logged:
             log.info("Focus on month(s) %s complete: every window has a fare "

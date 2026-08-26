@@ -170,6 +170,15 @@ def build_args() -> argparse.Namespace:
                         "e.g. --focus 1,2,3 for January then February then "
                         "March. 'none' clears it for this run. Redirects "
                         "effort; never raises the request rate.")
+    p.add_argument("--focus-max-age", type=float, default=None,
+                   metavar="HOURS",
+                   help="treat a focus month's answer as stale once it is "
+                        "older than this, so the focus re-prices instead of "
+                        "only backfilling. Without it, --focus finishes the "
+                        "moment every window has any trusted answer - which "
+                        "on 2026-08-26 was all 1,089 January-March windows, "
+                        "400 of them over a day old. Use it on a sale day: "
+                        "--focus 1,2,3 --focus-max-age 6")
     p.add_argument("--watch", nargs="?", type=float, const=30.0,
                    default=None, metavar="SECONDS",
                    help="live progress, refreshing every SECONDS (default "
@@ -301,14 +310,16 @@ def main() -> int:
                     # during a focus *and* during a post-pass drain, so the
                     # only honest rate is the one for the work being done.
                     started = (datetime.now(timezone.utc), snap.cursor,
-                               len(focus_pending(windows, snap, focus_months))
+                               len(focus_pending(windows, snap, focus_months,
+                                             max_age_hours=args.focus_max_age))
                                if focus_months else 0,
                                len(snap.suspect))
                 lines = watch_lines(windows, snap,
                                     threshold=prefs.good_price_usd,
                                     delay_s=(snap.delay_s or args.delay),
                                     started=started,
-                                    focus_months=focus_months)
+                                    focus_months=focus_months,
+                                    focus_max_age_hours=args.focus_max_age)
                 # Home the cursor and clear so the block refreshes in
                 # place. Harmless where it is ignored: the block just
                 # repeats instead.
@@ -474,7 +485,8 @@ def main() -> int:
                 store.focus_tries = {}
                 store.focus_done_logged = False
                 store.save(args.store)
-            pend = focus_pending(windows, store, focus_months)
+            pend = focus_pending(windows, store, focus_months,
+                                 max_age_hours=args.focus_max_age)
             log.info("FOCUS: finishing %s before the rest - %d window(s) "
                      "still without a trusted answer. The cold rotation is "
                      "paused at %d and resumes after.",
@@ -537,6 +549,7 @@ def main() -> int:
                 max_stops=cfg.max_stops, batch=args.batch,
                 max_total_hours=cfg.max_total_hours,
                 focus_months=focus_months,
+                focus_max_age_hours=args.focus_max_age,
                 chrome_override=cfg.chrome_path, timeout_s=cfg.chrome_timeout_s,
                 budget_ms=cfg.chrome_budget_ms, delay_s=current_delay,
                 on_find=announce, history_csv=cfg.sweep_history_csv,
