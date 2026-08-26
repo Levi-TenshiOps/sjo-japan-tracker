@@ -436,7 +436,7 @@ def render_html(
         )
     if is_great:
         headline = (
-            f"{format_price(best.price_usd)} is a standout price \u2014 "
+            f"{format_price(cheapest_seen)} is a standout price \u2014 "
             f"{headline[0].lower()}{headline[1:]}"
         )
 
@@ -620,6 +620,8 @@ def render_text(
             else min(verified, key=lambda o: o.price_usd))
     cheapest_seen = min([best.price_usd] + [o.price_usd for o in verified])
     band = bands.classify(cheapest_seen)
+    n_under_all = (sum(1 for i in itineraries if i.price_usd <= threshold)
+                   + sum(1 for o in verified if o.price_usd <= threshold))
     lines = [
         "SJO -> JAPAN FLIGHT TRACKER",
         "=" * 46,
@@ -629,9 +631,14 @@ def render_text(
         *verified_block_text(
             select_verified(verified, priority_months=priority_months,
                             share=priority_share), threshold),
-        f"{sum(1 for i in itineraries if i.price_usd <= threshold)} "
+        # Both numbers must span the browser block as well. Counting the
+        # grid alone printed "0 visa-free option(s) at or under $1,400.
+        # Cheapest: $2,509" immediately beneath a verified $1,347 - and
+        # the band beside it was already computed from `cheapest_seen`,
+        # so the label read "cheap" while pointing at the dear fare.
+        f"{n_under_all} "
         f"visa-free option(s) at or under {format_price(threshold)}.",
-        f"Cheapest: {format_price(best.price_usd)} "
+        f"Cheapest: {format_price(cheapest_seen)} "
         f"({BAND_LABEL[band]} for this route).",
         "",
     ]
