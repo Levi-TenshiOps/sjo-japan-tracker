@@ -50,3 +50,4 @@ sweep.pid
 # Temporary launcher for the 2026-08-25 rate experiment; machine-specific
 # absolute paths, and a rate that must not outlive the experiment.
 run_sweep_15.cmd
+run_sweep_5.cmd

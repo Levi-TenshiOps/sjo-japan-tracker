@@ -656,6 +656,55 @@ Three lessons, in order of how much they cost:
    reported was true and the thing the trip owner actually receives had
    been dead for hours.
 
+## Are the two emails sent at the right times? Measured, and yes
+
+Asked 2026-08-26. Answered from 851 same-window re-prices - each window's
+cheapest fare against its own previous cheapest, 10 min to 12 h apart, in
+Costa Rica time.
+
+**The first cut looked like a clear finding and was half a picture.**
+Counting only drops:
+
+    00:00-06:42  n=220  dropped 28.6%
+    06:42-09:03  n= 90  dropped 38.9%   <- the peak
+    09:03-20:00  n=338  dropped 10.1%
+    20:00-24:00  n=203  dropped  8.9%
+
+That reads as "the 06:42 email fires just before the busiest drop window,
+so hold it until 09:00", and there is even a mechanism: every fare at or
+under $1,600 here is Lufthansa Group, and that window is European filing
+hours. `first_call_hour` was built on it.
+
+**Then rises were counted too, and the finding evaporated:**
+
+    window        n   down     up    net mean
+    00:00-06:42  220  28.6%  25.0%     +$0
+    06:42-09:03   90  38.9%  21.1%     +$2
+    09:03-20:00  339  10.3%  17.1%     +$8
+    20:00-24:00  203   8.9%  18.7%    -$11
+
+The morning drops are *more frequent but smaller*. Holding the first email
+2.4 hours buys **+$2** - nothing - and costs the trip owner that much
+notice. Reverted.
+
+**What the same table does justify is the evening reservation.** 20:00 to
+midnight is the only window with a negative net: prices genuinely fall in
+the evening, so holding the second slot until `last_call_hour: 20` and
+spending it on the 21:27 run earns about $11 a day over sending it early.
+That rule was designed before this was measurable and it survives the
+measurement.
+
+So the current schedule is right and neither knob should move:
+
+    email 1   first qualifying fare, 06:42 run   morning is a wash, so
+                                                 earliest notice wins
+    email 2   held to 20:00, sent 21:27          evening prices fall
+
+**The lesson is the file's oldest one wearing new clothes: a rate of
+"things that went my way" is not an effect size.** Drops alone showed a
+4x difference between windows. Drops and rises together showed nothing.
+Never read a one-sided count as a reason to act.
+
 ## Three ways to measure the sweep rate, two of them wrong
 
 Asked on 2026-08-26 whether the rate was healthy. Answering it produced
