@@ -38,10 +38,10 @@ def healthy_store(**kw):
     return s
 
 
-def run(store=None, throttle=None, hours_since_email=2.0):
+def run(store=None, throttle=None, hours_since_email=2.0, **kw):
     return readiness_report(store or healthy_store(),
                             throttle_state=throttle or ThrottleState(),
-                            hours_since_email=hours_since_email)
+                            hours_since_email=hours_since_email, **kw)
 
 
 class TestTheHappyPath:
@@ -228,3 +228,51 @@ class TestTheWatchView:
         assert i > 0, "the read_only guard is gone"
         assert "args.watch is not None" in src[i:i + 200], (
             "--watch would write the store it is watching")
+
+
+# --- the advice itself, 2026-08-25 -----------------------------------------
+#
+# The READY text used to be four hardcoded lines naming "90 -> 45 -> 30" and
+# "hot_list_size 8 -> 18". By 2026-08-25 the sweep was at 40s with
+# hot_list_size 18, so a passing gate told the trip owner to make one change
+# that would have *slowed* the sweep and another that was already made.
+
+from tracker.sweeper import RATE_LADDER, next_rate_step
+
+
+class TestTheAdviceMatchesTheLiveSettings:
+    def test_the_ladder_only_goes_down(self):
+        assert list(RATE_LADDER) == sorted(RATE_LADDER, reverse=True)
+
+    def test_a_step_is_always_faster_than_now(self):
+        for current in (90.0, 60.0, 40.0, 25.0, 33.0, 41.0):
+            nxt = next_rate_step(current)
+            assert nxt is None or nxt < current, (current, nxt)
+
+    def test_the_floor_has_no_next_step(self):
+        assert next_rate_step(min(RATE_LADDER)) is None
+        assert next_rate_step(10.0) is None
+
+    def test_it_never_advises_slowing_down(self):
+        _, lines = run(delay_s=40.0, hot_list_size=18)
+        advice = " ".join(lines)
+        assert "40 -> 45" not in advice and "40 -> 90" not in advice
+        assert "40 -> 25" in advice
+
+    def test_a_setting_already_done_is_not_re_advised(self):
+        _, lines = run(delay_s=40.0, hot_list_size=18)
+        joined = " ".join(lines)
+        assert "hot_list_size 18 ->" not in joined
+        assert "leave it" in joined
+
+    def test_at_the_floor_it_says_there_is_nothing_to_raise(self):
+        _, lines = run(delay_s=15.0, hot_list_size=18)
+        joined = " ".join(lines)
+        assert "nothing left to raise" in joined
+        assert "the floor" in joined
+
+    def test_a_slow_sweep_is_still_told_to_speed_up(self):
+        _, lines = run(delay_s=90.0, hot_list_size=8)
+        joined = " ".join(lines)
+        assert "90 -> 60" in joined
+        assert "hot_list_size 8 -> 16" in joined

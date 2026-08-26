@@ -325,6 +325,8 @@ def main() -> int:
             store,
             throttle_state=_throttle.ThrottleState.load(cfg.throttle_file),
             hours_since_email=_alarm.hours_since_last_email(cfg.state_file),
+            delay_s=args.delay,
+            hot_list_size=getattr(cfg, "hot_list_size", None),
         )
         print('\nSafe to raise the rate or the Chrome budget?\n')
         for line in lines:

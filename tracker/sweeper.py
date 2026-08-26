@@ -756,8 +756,33 @@ def watch_lines(windows: Sequence, store: "SweepStore", *,
     return out
 
 
+#: The rate ladder, seconds between launches, slowest first. 15s is the
+#: floor on purpose: below it the gain curve flattens (each step buys less
+#: coverage than the last) while the traffic shape gets steadily harder to
+#: pass off as a person. Reaching 10s is possible and not worth the risk.
+RATE_LADDER = (90.0, 60.0, 40.0, 25.0, 15.0)
+
+
+def next_rate_step(current: float) -> float | None:
+    """The next rung down from `current`, or None at the floor.
+
+    Derived rather than written into the advice text, because a hardcoded
+    "90 -> 45 -> 30" kept telling the reader to make changes that had
+    already been made - on 2026-08-25 it advised dropping to 45s while the
+    sweep was already running at 40, and raising hot_list_size to 18 when
+    it was 18. Advice that has to be re-read against the config to be
+    trusted is worse than no advice.
+    """
+    for rung in RATE_LADDER:
+        if rung < current - 0.01:
+            return rung
+    return None
+
+
 def readiness_report(store: "SweepStore", *, throttle_state, hours_since_email,
                      quiet_hours: float = READY_QUIET_HOURS,
+                     delay_s: float | None = None,
+                     hot_list_size: int | None = None,
                      now: datetime | None = None) -> tuple[bool, list[str]]:
     """Is it safe to raise the sweep rate or the Chrome budget yet?
 
@@ -818,9 +843,34 @@ def readiness_report(store: "SweepStore", *, throttle_state, hours_since_email,
     ready = all(checks)
     lines.append("")
     if ready:
-        lines.append("READY. Raise ONE thing, then watch a full day before the next:")
-        lines.append("   sweep rate   --delay 90 -> 45 -> 30, one step at a time")
-        lines.append("   Chrome reach hot_list_size 8 -> 18 (fills chrome_max_per_run)")
+        moves: list[str] = []
+        if delay_s is not None:
+            nxt = next_rate_step(delay_s)
+            moves.append(
+                f"   sweep rate   --delay {delay_s:.0f} -> {nxt:.0f}"
+                if nxt is not None else
+                f"   sweep rate   already at {delay_s:.0f}s, the floor of the "
+                f"ladder - leave it"
+            )
+        if hot_list_size is not None:
+            moves.append(
+                f"   Chrome reach hot_list_size {hot_list_size} -> "
+                f"{min(hot_list_size * 2, 24)} (fills chrome_max_per_run)"
+                if hot_list_size < 18 else
+                f"   Chrome reach hot_list_size is {hot_list_size}, enough to "
+                f"fill chrome_max_per_run - leave it"
+            )
+        anything_left = any("->" in m for m in moves) or not moves
+        lines.append(
+            "READY. Raise ONE thing, then watch a full day before the next:"
+            if anything_left else
+            "READY - but there is nothing left to raise:"
+        )
+        lines.extend(moves or [
+            "   sweep rate   --delay one rung down the ladder "
+            f"({' -> '.join(f'{r:.0f}' for r in RATE_LADDER)})",
+            "   Chrome reach hot_list_size, up to 18",
+        ])
         lines.append("Never both at once - if the address complains you want to")
         lines.append("know which change did it.")
     else:
