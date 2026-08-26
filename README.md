@@ -158,7 +158,7 @@ python sweep_forever.py --stop
 
 # 2. re-price every priority-month window once, whatever its age.
 #    --delay MUST be repeated: a restart drops to the default rate.
-python sweep_forever.py --focus 1,2,3 --focus-max-age 0                        --focus-max-tries 1 --delay 5
+python sweep_forever.py --focus 1,2,3 --focus-max-age 0 --focus-max-tries 1 --delay 5
 
 # 3. watch it, in another window
 python sweep_forever.py --watch
@@ -191,6 +191,43 @@ so it finds more to do until every window has had three goes.
 
 Either way the focus prices everything once before re-pricing anything, so
 coverage comes first and you can email yourself part-way through.
+
+### How long it takes
+
+**About 7 hours** to re-price all 1,089 priority-month windows at
+`--delay 5`. Where that goes:
+
+| `--delay` | cycle | launches/h | to the focus | all 1,089 |
+|---|---|---|---|---|
+| 15s | 29s | 124 | 99 | 11.0 h |
+| 10s | 24s | 150 | 120 | 9.1 h |
+| **5s** | **19s** | **189** | **152** | **7.2 h** |
+| 0s | 14s | 257 | 206 | 5.3 h |
+
+**The page itself costs ~14 s**, so the delay is no longer the dominant
+term and even `--delay 0` cannot beat 5.3 h. At 5s you are already within
+two hours of the floor, and buying those two hours means doubling the
+request rate into territory that has thrown this address into a day-long
+throttle before.
+
+One launch in five goes to the hot list rather than the focus. Without it
+the run would take 5.8 h, but the cheapest fare in your email could be
+seven hours stale by the end.
+
+**You do not wait 7 hours to see anything.** Progress in order:
+
+| by | done |
+|---|---|
+| ~3.7 h | all of January (558 windows) |
+| ~6.8 h | January and February (1,034 of 1,089) |
+| ~7.2 h | March too — only 55 windows, since a late-March departure returns in April |
+
+So: start it in the morning, `--email-now` at lunchtime for a first look,
+and again in the evening for the full picture. If a sale breaks at 09:00
+you have all of January re-priced by early afternoon.
+
+If a throttle lands mid-run the tripwire drops you to `--delay 10` and the
+run stretches to ~9 h. It will not fail — it will take longer.
 
 `--email-now` reads only what is already on disk — **it makes no requests
 to Google**, so it cannot be throttled, never competes with the sweep, and
