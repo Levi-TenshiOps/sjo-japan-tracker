@@ -156,9 +156,9 @@ Black Friday, a flash sale:
 # 1. stop the sweep cleanly (never kill it)
 python sweep_forever.py --stop
 
-# 2. re-price the priority months, anything answered over 12 h ago.
+# 2. re-price every priority-month window once, whatever its age.
 #    --delay MUST be repeated: a restart drops to the default rate.
-python sweep_forever.py --focus 1,2,3 --focus-max-age 12 --delay 5
+python sweep_forever.py --focus 1,2,3 --focus-max-age 0                        --focus-max-tries 1 --delay 5
 
 # 3. watch it, in another window
 python sweep_forever.py --watch
@@ -173,20 +173,24 @@ prints a warning when the two differ, but the flag is the fix. The rate is
 deliberately not remembered: the boot launcher passes no `--delay` so a
 reboot always comes back at the safe default.
 
-**Which age to ask for.** Simulated over the real 1,089 January–March
-windows at `--delay 5`:
+**Two ways to ask, and they answer different questions.** Simulated over
+the real 1,089 January–March windows at `--delay 5`:
 
-| `--focus-max-age` | windows | finishes in |
+| command | finishes in | re-prices |
 |---|---|---|
-| 24 | 292 | ~2 h |
-| **12** | **854** | **~5.6 h** |
-| 6 | 1,089 | all priced by ~7 h, then keeps re-pricing |
+| `--focus 1,2,3 --focus-max-age 12` | **~4 h** | 590 — only what is over 12 h old |
+| `--focus 1,2,3 --focus-max-age 0 --focus-max-tries 1` | **~7 h** | **all 1,089, once each** |
 
-12 is the sweet spot: it re-prices everything not seen since yesterday and
-**stops**. A smaller number is not more thorough so much as endless —
-windows go stale again while the focus is still running, so it keeps
-finding work. The focus prices everything once before re-pricing anything,
-so you get full coverage first either way.
+Use the first when you just want the stale half refreshed. Use the second
+on a real sale day: a fare checked an hour ago still holds a *pre-sale*
+price, and an age cut-off skips exactly those windows.
+
+`--focus-max-tries 1` is what makes the second one stop. Without it the
+focus keeps working — windows go stale again while it is still running —
+so it finds more to do until every window has had three goes.
+
+Either way the focus prices everything once before re-pricing anything, so
+coverage comes first and you can email yourself part-way through.
 
 `--email-now` reads only what is already on disk — **it makes no requests
 to Google**, so it cannot be throttled, never competes with the sweep, and
@@ -209,7 +213,7 @@ python sweep_forever.py --stop       # stop it cleanly (never kill it)
 python -m tracker.cli --status       # settings and coverage
 python -m tracker.cli --dry-run      # test, send nothing
 python -m tracker.cli --email-now    # email what has been collected so far
-python -m pytest tests/ -q           # 1,543 tests, offline
+python -m pytest tests/ -q           # 1,552 tests, offline
 ```
 
 `--watch`, `--status`, `--coverage` and `--readiness` only read files. They

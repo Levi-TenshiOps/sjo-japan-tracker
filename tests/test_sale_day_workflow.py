@@ -148,3 +148,47 @@ class TestTheFocusEndsAndTheSweepCarriesOn:
         src = re.sub(r"\s+", " ",
                      Path("tracker/sweeper.py").read_text(encoding="utf-8"))
         assert "replay = True # freezes the cold cursor" in src
+
+
+class TestEveryFocusFlagReachesSweepBatch:
+    """The wiring test, because this is where the flags go to die.
+
+    `sweep_batch` is the only call that decides what gets priced. A flag
+    threaded into `watch_lines` and the startup banner but not into
+    `sweep_batch` looks completely wired - the right backlog appears in
+    --watch, the startup line reports the right count - and changes
+    nothing about what the sweep actually does.
+
+    I made exactly that mistake with --focus-max-tries on 2026-08-26,
+    minutes after writing the commit message warning about it.
+    """
+
+    def _sweep_batch_call(self):
+        from pathlib import Path
+        src = Path("sweep_forever.py").read_text(encoding="utf-8")
+        i = src.index("priced = sweep_batch(")
+        return src[i:src.index(")", src.index("on_alarm=raise_alarm"))]
+
+    def test_focus_months_is_passed(self):
+        assert "focus_months=focus_months" in self._sweep_batch_call()
+
+    def test_focus_max_age_is_passed(self):
+        assert "focus_max_age_hours=args.focus_max_age" in self._sweep_batch_call()
+
+    def test_focus_max_tries_is_passed(self):
+        assert "focus_max_tries=args.focus_max_tries" in self._sweep_batch_call()
+
+    def test_the_live_delay_is_passed(self):
+        assert "delay_s=current_delay" in self._sweep_batch_call()
+
+    def test_every_focus_flag_has_a_home(self):
+        """Any --focus* flag must reach sweep_batch, or it is decoration."""
+        import sweep_forever, sys
+        sys.argv = ["sweep_forever.py"]
+        args = sweep_forever.build_args()
+        call = self._sweep_batch_call()
+        for name in vars(args):
+            if not name.startswith("focus"):
+                continue
+            assert f"args.{name}" in call, (
+                f"--{name.replace('_', '-')} never reaches sweep_batch")

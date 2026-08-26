@@ -685,6 +685,9 @@ def watch_lines(windows: Sequence, store: "SweepStore", *,
                 started: tuple | None = None,
                 focus_months: Sequence[int] = (),
                 focus_max_age_hours: float | None = None,
+                #: None means the module default; it is defined below this
+                #: function, so it cannot be the literal default here.
+                focus_max_tries: int | None = None,
                 now: datetime | None = None) -> list[str]:
     """A compact live view of the sweep, for `--watch`.
 
@@ -709,6 +712,7 @@ def watch_lines(windows: Sequence, store: "SweepStore", *,
     # leading with it would show a bar that does not move for a day, which
     # reads as a stalled sweep. Show the work actually being done.
     pending = (focus_pending(windows, store, focus_months,
+                             max_tries=focus_max_tries or FOCUS_MAX_TRIES,
                              max_age_hours=focus_max_age_hours)
                if focus_months else [])
     if focus_months:
@@ -1573,6 +1577,10 @@ def sweep_batch(
     #: backfills, and on a route whose windows all already have answers
     #: that means it does nothing at all.
     focus_max_age_hours: float | None = None,
+    #: How many times one window may be priced in a single focus. 1 with
+    #: `focus_max_age_hours=0` means "re-price every window once, then
+    #: stop" - the sale-day case.
+    focus_max_tries: int | None = None,
     batch: int = 10,
     chrome: str | None = None,
     chrome_override: str = "",
@@ -1678,6 +1686,7 @@ def sweep_batch(
         # Restarting the sweep is how a focus is asked for again, and the
         # startup path clears both this flag and the attempt counters.
         pending = (focus_pending(windows, store, focus_months,
+                                 max_tries=focus_max_tries or FOCUS_MAX_TRIES,
                                  max_age_hours=focus_max_age_hours)
                    if focus_months and not store.focus_done_logged else [])
         if focus_months and not pending and not store.focus_done_logged:

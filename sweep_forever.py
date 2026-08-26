@@ -52,7 +52,8 @@ from tracker.browser import chrome_path           # noqa: E402
 from tracker.preferences import Preferences, PreferencesError  # noqa: E402
 from tracker.schedule import generate_windows     # noqa: E402
 from tracker.sweeper import (                     # noqa: E402
-    DEFAULT_STORE, LAUNCH_SECONDS, RECHECK_EVERY, Discovery, SweepStore,
+    DEFAULT_STORE, FOCUS_MAX_TRIES, LAUNCH_SECONDS, RECHECK_EVERY,
+    Discovery, SweepStore,
     coverage_report,
     focus_pending, queue_unverified, readiness_report, slower_rate_step,
     sweep_batch,
@@ -179,6 +180,12 @@ def build_args() -> argparse.Namespace:
                         "on 2026-08-26 was all 1,089 January-March windows, "
                         "400 of them over a day old. Use it on a sale day: "
                         "--focus 1,2,3 --focus-max-age 6")
+    p.add_argument("--focus-max-tries", type=int, default=None, metavar="N",
+                   help="how many times one window may be priced during a "
+                        "focus (default 3). Use 1 with --focus-max-age 0 to "
+                        "re-price every window in the focus months exactly "
+                        "once and then stop - the sale-day case, where even "
+                        "a window checked an hour ago holds a pre-sale price.")
     p.add_argument("--watch", nargs="?", type=float, const=30.0,
                    default=None, metavar="SECONDS",
                    help="live progress, refreshing every SECONDS (default "
@@ -310,8 +317,11 @@ def main() -> int:
                     # during a focus *and* during a post-pass drain, so the
                     # only honest rate is the one for the work being done.
                     started = (datetime.now(timezone.utc), snap.cursor,
-                               len(focus_pending(windows, snap, focus_months,
-                                             max_age_hours=args.focus_max_age))
+                               len(focus_pending(
+                                   windows, snap, focus_months,
+                                   max_age_hours=args.focus_max_age,
+                                   max_tries=(args.focus_max_tries
+                                              or FOCUS_MAX_TRIES)))
                                if focus_months else 0,
                                len(snap.suspect))
                 lines = watch_lines(windows, snap,
@@ -319,7 +329,8 @@ def main() -> int:
                                     delay_s=(snap.delay_s or args.delay),
                                     started=started,
                                     focus_months=focus_months,
-                                    focus_max_age_hours=args.focus_max_age)
+                                    focus_max_age_hours=args.focus_max_age,
+                                    focus_max_tries=args.focus_max_tries)
                 # Home the cursor and clear so the block refreshes in
                 # place. Harmless where it is ignored: the block just
                 # repeats instead.
@@ -486,7 +497,9 @@ def main() -> int:
                 store.focus_done_logged = False
                 store.save(args.store)
             pend = focus_pending(windows, store, focus_months,
-                                 max_age_hours=args.focus_max_age)
+                                 max_age_hours=args.focus_max_age,
+                                 max_tries=(args.focus_max_tries
+                                            or FOCUS_MAX_TRIES))
             log.info("FOCUS: finishing %s before the rest - %d window(s) "
                      "still without a trusted answer. The cold rotation is "
                      "paused at %d and resumes after.",
@@ -573,6 +586,7 @@ def main() -> int:
                 max_total_hours=cfg.max_total_hours,
                 focus_months=focus_months,
                 focus_max_age_hours=args.focus_max_age,
+                focus_max_tries=args.focus_max_tries,
                 chrome_override=cfg.chrome_path, timeout_s=cfg.chrome_timeout_s,
                 budget_ms=cfg.chrome_budget_ms, delay_s=current_delay,
                 on_find=announce, history_csv=cfg.sweep_history_csv,
