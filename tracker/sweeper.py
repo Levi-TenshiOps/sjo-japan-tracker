@@ -226,6 +226,11 @@ class SweepStore:
     checked: dict = field(default_factory=dict)
     consecutive_rests: int = 0
     throttled_since: str = ""
+    #: The delay the sweep is really pacing at, written every batch. The
+    #: read-only views run in their own process with their own --delay
+    #: default, so without this `--watch` reports an ETA for a rate nobody
+    #: is using - and the tripwire can change the rate mid-run.
+    delay_s: float = 0.0
     last_throttle: str = ""
 
     # -- persistence -------------------------------------------------------
@@ -775,6 +780,26 @@ def next_rate_step(current: float) -> float | None:
     """
     for rung in RATE_LADDER:
         if rung < current - 0.01:
+            return rung
+    return None
+
+
+def slower_rate_step(current: float) -> float | None:
+    """The next rung *up* (slower) from `current`, or None at the top.
+
+    The other half of `next_rate_step`, and the one that makes raising the
+    rate a bounded experiment rather than an open one. A rest means Google
+    is already refusing; continuing at the rate that provoked it is the
+    exact move that turned a short throttle into an hour of one on
+    2026-08-23. The sweep steps itself down instead.
+
+    One-way within a session, on purpose. It never speeds back up on its
+    own - a quiet stretch right after a rest only means the health samples
+    were cleared, which is precisely the false all-clear this project has
+    already shipped once.
+    """
+    for rung in reversed(RATE_LADDER):
+        if rung > current + 0.01:
             return rung
     return None
 

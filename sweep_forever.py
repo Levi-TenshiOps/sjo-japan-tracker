@@ -52,8 +52,10 @@ from tracker.browser import chrome_path           # noqa: E402
 from tracker.preferences import Preferences, PreferencesError  # noqa: E402
 from tracker.schedule import generate_windows     # noqa: E402
 from tracker.sweeper import (                     # noqa: E402
-    DEFAULT_STORE, RECHECK_EVERY, Discovery, SweepStore, coverage_report,
-    focus_pending, queue_unverified, readiness_report, sweep_batch,
+    DEFAULT_STORE, LAUNCH_SECONDS, RECHECK_EVERY, Discovery, SweepStore,
+    coverage_report,
+    focus_pending, queue_unverified, readiness_report, slower_rate_step,
+    sweep_batch,
     sweep_order,
     unverified_windows, watch_lines,
 )
@@ -299,7 +301,8 @@ def main() -> int:
                                if focus_months else 0)
                 lines = watch_lines(windows, snap,
                                     threshold=prefs.good_price_usd,
-                                    delay_s=args.delay, started=started,
+                                    delay_s=(snap.delay_s or args.delay),
+                                    started=started,
                                     focus_months=focus_months)
                 # Home the cursor and clear so the block refreshes in
                 # place. Harmless where it is ignored: the block just
@@ -325,7 +328,7 @@ def main() -> int:
             store,
             throttle_state=_throttle.ThrottleState.load(cfg.throttle_file),
             hours_since_email=_alarm.hours_since_last_email(cfg.state_file),
-            delay_s=args.delay,
+            delay_s=(store.delay_s or args.delay),
             hot_list_size=getattr(cfg, "hot_list_size", None),
         )
         print('\nSafe to raise the rate or the Chrome budget?\n')
@@ -336,7 +339,7 @@ def main() -> int:
     if args.coverage:
         for line in coverage_report(windows, store,
                                     threshold=prefs.good_price_usd,
-                                    delay_s=args.delay):
+                                    delay_s=(store.delay_s or args.delay)):
             print(line)
         return 0
 
@@ -493,8 +496,29 @@ def main() -> int:
         else:
             log.debug("new best for window: %s", d.describe())
 
+    # --- the rate tripwire -------------------------------------------------
+    # Raising the rate is an experiment, and an experiment needs a stop
+    # condition that does not depend on somebody watching. `consecutive_rests`
+    # only ever goes up when the sweep has given up and stopped for a while,
+    # so a rise in it is the one unambiguous "Google is refusing" signal the
+    # store carries. When it moves, drop a rung.
+    #
+    # Deliberately one-way for the life of the process. Speeding back up after
+    # a quiet stretch would be reading a cleared health sample as an all-clear
+    # - the same mistake as the recovery email that described the wrong
+    # throttle.
+    current_delay = args.delay
+    rests_seen = store.consecutive_rests
+    _backoff = slower_rate_step(current_delay)
+    if _backoff is not None:
+        log.info("Rate tripwire armed: at --delay %.0fs (~%.0f req/day), "
+                 "backing off to %.0fs if Google starts refusing.",
+                 current_delay, 86400 / (current_delay + LAUNCH_SECONDS),
+                 _backoff)
+
     while True:
         priced = 0
+        store.delay_s = current_delay
         try:
             priced = sweep_batch(
                 windows, store,
@@ -503,7 +527,7 @@ def main() -> int:
                 max_total_hours=cfg.max_total_hours,
                 focus_months=focus_months,
                 chrome_override=cfg.chrome_path, timeout_s=cfg.chrome_timeout_s,
-                budget_ms=cfg.chrome_budget_ms, delay_s=args.delay,
+                budget_ms=cfg.chrome_budget_ms, delay_s=current_delay,
                 on_find=announce, history_csv=cfg.sweep_history_csv,
                 lock_path=cfg.google_lock,
                 hot_threshold=prefs.good_price_usd,
@@ -514,6 +538,23 @@ def main() -> int:
         except Exception as exc:            # noqa: BLE001 - must not die
             log.warning("batch failed (%s); pausing 60s", exc)
             time.sleep(60)
+
+        if store.consecutive_rests > rests_seen:
+            rests_seen = store.consecutive_rests
+            backed = slower_rate_step(current_delay)
+            if backed is not None:
+                log.warning("TRIPWIRE: rest #%d at --delay %.0fs. Backing the "
+                            "rate off to %.0fs (%.0f -> %.0f req/day) for the "
+                            "rest of this process. Restart with an explicit "
+                            "--delay to override.",
+                            store.consecutive_rests, current_delay, backed,
+                            86400 / (current_delay + LAUNCH_SECONDS),
+                            86400 / (backed + LAUNCH_SECONDS))
+                current_delay = backed
+            else:
+                log.warning("TRIPWIRE: rest #%d, but --delay %.0fs is already "
+                            "the slowest rung; not backing off further.",
+                            store.consecutive_rests, current_delay)
 
         dropped = store.prune()
 
