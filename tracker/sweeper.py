@@ -1690,9 +1690,20 @@ def sweep_batch(
                                  max_age_hours=focus_max_age_hours)
                    if focus_months and not store.focus_done_logged else [])
         if focus_months and not pending and not store.focus_done_logged:
-            log.info("Focus on month(s) %s complete: every window has a fare "
-                     "or a trusted answer. Resuming the full rotation.",
-                     ", ".join(str(m) for m in focus_months))
+            # This line is the cue to run `--email-now`, so it has to say
+            # which job finished. Under a refresh the windows were not
+            # merely "answered" - they were all just re-priced.
+            # NOT `done`: that is this batch's window counter, three lines
+            # further down as `done += 1`. Shadowing it turned an int into a
+            # str and broke eleven tests at once - which is the argument for
+            # having them.
+            finished = ("every window re-priced"
+                        if focus_max_age_hours is not None else
+                        "every window has a fare or a trusted answer")
+            log.info("Focus on month(s) %s complete: %s. Resuming the full "
+                     "rotation. Run `python -m tracker.cli --email-now` for "
+                     "the results.",
+                     ", ".join(str(m) for m in focus_months), finished)
             store.focus_done_logged = True
 
         recheck_turn = store.windows_priced % RECHECK_EVERY == 0

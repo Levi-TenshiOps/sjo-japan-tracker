@@ -130,14 +130,36 @@ class TestEmailNowIsSafeBesideARunningSweep:
 
 
 class TestTheFocusEndsAndTheSweepCarriesOn:
-    def test_a_finished_focus_hands_back(self):
+    def test_a_finished_focus_hands_back(self, tmp_path):
         """After the sale day the sweep must return to normal by itself,
-        without another restart."""
-        import re
-        from pathlib import Path
-        src = re.sub(r"\s+", " ",
-                     Path("tracker/sweeper.py").read_text(encoding="utf-8"))
-        assert "Resuming the full rotation." in src
+        without another restart.
+
+        Behavioural, not a source search. The previous version matched the
+        literal "Resuming the full rotation." and broke the moment that
+        message gained a sentence, because the wrapped source has a quote
+        and a space in the middle of it. Fourth source-matching test in this
+        project to misfire on a message it did not care about.
+        """
+        from datetime import date, timedelta
+        from tracker.schedule import Window
+        from tracker.sweeper import SweepStore, sweep_batch
+        w = [Window(date(2027, 1, 1) + timedelta(days=i),
+                    date(2027, 1, 1) + timedelta(days=i + 27))
+             for i in range(6)]
+        s = SweepStore()
+        s.recent, s.recent_blank, s.recent_worked = [0] * 25, [0] * 25, [1] * 25
+        # Everything already answered, so the focus is finished on arrival.
+        for x in w:
+            s.checked[x.key] = {"at": sweeper._now(), "empty": True,
+                                "blank": True, "healthy": True}
+        dom = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "chrome_dom_32n.html"), encoding="utf-8").read()
+        before = s.cursor
+        sweep_batch(w, s, batch=3, fetch=lambda u: dom, delay_s=0,
+                    sleep=lambda *_: None, focus_months=[1])
+        assert s.focus_done_logged is True, "it did not notice it had finished"
+        assert s.cursor > before, (
+            "the cold rotation did not resume after the focus finished")
 
     def test_the_cold_cursor_resumes_where_it_stopped(self):
         """Frozen, not skipped - or the deferred months would sit behind

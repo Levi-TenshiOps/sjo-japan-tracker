@@ -500,10 +500,30 @@ def main() -> int:
                                  max_age_hours=args.focus_max_age,
                                  max_tries=(args.focus_max_tries
                                             or FOCUS_MAX_TRIES))
-            log.info("FOCUS: finishing %s before the rest - %d window(s) "
-                     "still without a trusted answer. The cold rotation is "
-                     "paused at %d and resumes after.",
-                     names, len(pend), store.cursor)
+            # Say which of the two jobs this is. Under --focus-max-age the
+            # windows all *have* answers - they are stale, not missing - and
+            # "1089 window(s) still without a trusted answer" read at 6am on
+            # a sale day looks like the store has been wiped.
+            tries = args.focus_max_tries or FOCUS_MAX_TRIES
+            if args.focus_max_age is None:
+                what = "still without a trusted answer"
+            elif args.focus_max_age <= 0:
+                what = f"to re-price, every one of them, at most {tries}x each"
+            else:
+                what = (f"answered more than {args.focus_max_age:g} h ago, "
+                        f"at most {tries}x each")
+            log.info("FOCUS: finishing %s before the rest - %d window(s) %s. "
+                     "The cold rotation is paused at %d and resumes after.",
+                     names, len(pend), what, store.cursor)
+            # An age with the default try count does not terminate in one
+            # sweep: windows go stale again while the focus runs, so it
+            # keeps finding work until each has had every try. Say so, since
+            # the whole point on a sale day is knowing when it is done.
+            if args.focus_max_age is not None and tries > 1:
+                log.warning("FOCUS: with --focus-max-age %g and %d tries this "
+                            "will keep re-pricing as windows go stale again. "
+                            "Add --focus-max-tries 1 for a single pass that "
+                            "stops.", args.focus_max_age, tries)
 
     def raise_alarm(kind: str, facts: dict) -> None:
         """Best effort. A failed alarm must never stop the sweep."""
