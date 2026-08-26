@@ -381,7 +381,9 @@ def render_html(
     priority_label: str = "",
     verified: Sequence = (),
 ) -> str:
-    verified_html = verified_block_html(verified, threshold)
+    verified_html = verified_block_html(
+        select_verified(verified, priority_months=priority_months,
+                        share=priority_share), threshold)
     verified_note = (
         " — the block above is the checked, accurate one."
         if verified else ".")
@@ -624,7 +626,9 @@ def render_text(
         "",
         GREETING,
         "",
-        *verified_block_text(verified, threshold),
+        *verified_block_text(
+            select_verified(verified, priority_months=priority_months,
+                            share=priority_share), threshold),
         f"{sum(1 for i in itineraries if i.price_usd <= threshold)} "
         f"visa-free option(s) at or under {format_price(threshold)}.",
         f"Cheapest: {format_price(best.price_usd)} "
@@ -724,6 +728,59 @@ def checked_ago(option, now=None) -> str:
     return f"checked {round(mins / 60)} hr ago"
 
 
+# How many browser-verified fares the email shows. Six was arbitrary and
+# became wrong on 2026-08-25, when `hot_list_size` rose to 18: the run
+# verifies about eleven windows live and showed barely half of them.
+VERIFIED_ROWS = 10
+
+
+def select_verified(verified, *, count: int = VERIFIED_ROWS,
+                    priority_months=(), share: float = 0.5) -> list:
+    """Cheapest first, with the priority months guaranteed a share.
+
+    The same contract `ranking.select_top` gives the grid table, which this
+    block could not reuse: that works on `Itinerary` (`outbound_date`,
+    `outbound_duration_min`) and these are `BrowserOption` (`depart_date`,
+    `total_minutes`).
+
+    It matters here more than there. This block is the part of the email
+    that carries *live* prices, and it is sorted purely by price - so a
+    month that happens to be cheap can fill every visible row and hide the
+    months the trip owner actually asked about. On 2026-08-25 November
+    already held two of six, on a month barely explored.
+
+    The quota shapes membership, never order: the list returned is always
+    strictly cheapest-first, and the single cheapest fare always appears
+    whatever month it is in.
+    """
+    ranked = sorted(verified, key=lambda o: (o.price_usd, o.total_minutes))
+    if not priority_months or not ranked:
+        return ranked[:count]
+    wanted = {int(m) for m in priority_months}
+    pri = [o for o in ranked if o.depart_date.month in wanted]
+    other = [o for o in ranked if o.depart_date.month not in wanted]
+
+    # Reserve the priority slots, then fill what is left from the cheapest
+    # remaining *of either kind*. Filling from `other` first would make the
+    # quota a ceiling instead of a floor: with twelve priority fares at
+    # $1,000 and twelve others at $2,000 it took five of each, burying five
+    # cheaper priority fares under dearer ones. The quota shapes membership
+    # only when it has to.
+    reserved = min(len(pri), int(count * share))
+    chosen = list(pri[:reserved])
+    taken = {id(o) for o in chosen}
+    for o in ranked:
+        if len(chosen) >= count:
+            break
+        if id(o) not in taken:
+            chosen.append(o)
+            taken.add(id(o))
+    # The cheapest fare found must never be hidden by the quota.
+    if id(ranked[0]) not in {id(o) for o in chosen}:
+        chosen = [ranked[0]] + chosen[:count - 1]
+    return sorted(chosen, key=lambda o: (o.price_usd, o.total_minutes))[:count]
+
+
 def verified_block_html(verified, threshold: int) -> str:
     """The Chrome-verified fares, above everything else in the email.
 
@@ -735,7 +792,7 @@ def verified_block_html(verified, threshold: int) -> str:
     if not verified:
         return ""
     rows = []
-    for o in verified[:6]:
+    for o in verified[:VERIFIED_ROWS]:
         hrs, mins = divmod(o.total_minutes, 60)
         ago = checked_ago(o)
         age_txt = f" · {ago}" if ago else ""
@@ -774,7 +831,7 @@ def verified_block_text(verified, threshold: int) -> list[str]:
     if not verified:
         return []
     lines = ["VERIFIED IN A REAL BROWSER", "-" * 46]
-    for o in verified[:6]:
+    for o in verified[:VERIFIED_ROWS]:
         hrs, mins = divmod(o.total_minutes, 60)
         flag = "  <-- under your threshold" if o.price_usd <= threshold else ""
         lines.append(f"{format_price(o.price_usd)}  {o.route_label}{flag}")
