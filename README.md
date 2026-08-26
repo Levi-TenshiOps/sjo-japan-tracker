@@ -133,7 +133,57 @@ python sweep_forever.py --focus none    # back to normal
 ```
 
 A focus **redirects** effort and never asks for more of it — the request
-rate is untouched. Useful before a sale day.
+rate is untouched.
+
+By default a focus only **backfills**: it prices windows that have no
+trustworthy answer yet, and stops as soon as every one of them has one.
+That is what you want after a throttle. It is *not* what you want on a
+sale day, when every window already has an answer and the answers are the
+problem — half of them can be a day old.
+
+`--focus-max-age` makes a stale answer count as unanswered again:
+
+```bash
+python sweep_forever.py --focus 1,2,3 --focus-max-age 6
+```
+
+## Sale day
+
+The whole sequence, for a day when fares are expected to move — Labor Day,
+Black Friday, a flash sale:
+
+```bash
+# 1. stop the sweep cleanly (never kill it)
+python sweep_forever.py --stop
+
+# 2. re-price the priority months, anything answered over 6 h ago.
+#    --delay MUST be repeated: a restart drops to the default rate.
+python sweep_forever.py --focus 1,2,3 --focus-max-age 6 --delay 5
+
+# 3. watch it, in another window
+python sweep_forever.py --watch
+
+# 4. when it says the focus is complete, email yourself the results
+python -m tracker.cli --email-now
+```
+
+**Repeat `--delay`.** A restart uses the default, not the rate you were
+running at, and that is the difference between ~5 hours and ~16. The sweep
+prints a warning when the two differ, but the flag is the fix. The rate is
+deliberately not remembered: the boot launcher passes no `--delay` so a
+reboot always comes back at the safe default.
+
+`--email-now` reads only what is already on disk — **it makes no requests
+to Google**, so it cannot be throttled, never competes with the sweep, and
+is safe to run as many times as you like. It also does not touch the
+two-a-day budget or the held evening slot, so your normal emails still
+arrive. Its subject starts with `[on demand]` so it is never mistaken for
+an alert.
+
+When the focus finishes it says so and hands back to the ordinary
+rotation by itself — no second restart needed. The cold cursor is frozen
+while it runs, not skipped, so October–December resume exactly where they
+stopped.
 
 ## Commands
 
@@ -143,7 +193,8 @@ python sweep_forever.py --status     # what has it found?
 python sweep_forever.py --stop       # stop it cleanly (never kill it)
 python -m tracker.cli --status       # settings and coverage
 python -m tracker.cli --dry-run      # test, send nothing
-python -m pytest tests/ -q           # 1,373 tests, offline
+python -m tracker.cli --email-now    # email what has been collected so far
+python -m pytest tests/ -q           # 1,543 tests, offline
 ```
 
 `--watch`, `--status`, `--coverage` and `--readiness` only read files. They

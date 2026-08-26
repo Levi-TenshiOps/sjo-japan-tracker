@@ -532,6 +532,29 @@ def main() -> int:
     # already seen, not greater. The tripwire fired once and then never
     # again, which is precisely the case it exists for.
     rests_seen = store.rests_total
+
+    # A restart silently drops back to the default rate, and on a sale day
+    # that is the difference between a focus finishing and not: measured
+    # 2026-08-26, 880 stale windows take 5.8 h at --delay 5 and 16.5 h at
+    # the 40s default, with nothing on screen to say which you got.
+    #
+    # The rate is deliberately NOT persisted. The Startup launcher passes no
+    # --delay precisely so the default is what survives a reboot - a fast
+    # rate written into an unattended file is what threw this address into a
+    # day-long throttle on 2026-08-23. So: keep the safe default, and say
+    # plainly that it differs from last time.
+    last = getattr(store, "delay_s", 0.0) or 0.0
+    if last and abs(last - current_delay) > 0.01:
+        log.warning("NOTE: the previous run was at --delay %.0fs, this one is "
+                    "at %.0fs (%s). A full pass is %.1f d instead of %.1f d. "
+                    "Pass --delay %.0f to continue at the old rate.",
+                    last, current_delay,
+                    "you asked for it" if "--delay" in sys.argv
+                    else "the default, because --delay was not given",
+                    len(windows) * (current_delay + LAUNCH_SECONDS) / 86400,
+                    len(windows) * (last + LAUNCH_SECONDS) / 86400,
+                    last)
+
     _backoff = slower_rate_step(current_delay)
     if _backoff is not None:
         log.info("Rate tripwire armed: at --delay %.0fs (~%.0f req/day), "
