@@ -262,3 +262,68 @@ class TestAFocusCanRefreshNotOnlyBackfill:
                 break
         assert focus_pending(w, s, [1], max_age_hours=6) == [], \
             "the refresh focus never finished"
+
+
+class TestABreadthFirstFocus:
+    """Everything once before anything twice.
+
+    Found 2026-08-26 simulating the real sale-day shape. `focus_pending`
+    was ordered month-then-date, so it always returned the earliest stale
+    window - and under `max_age_hours` windows go stale *while the focus
+    is still running*. Over the real 1,089 January-March windows at the
+    real pace: 2,913 picks across 19.2 hours, January re-priced three
+    times each while March waited for its first look.
+
+    Ordering by try count first completes the sweep before any second
+    look: every window priced by ~7 h instead of March waiting 19.
+    """
+
+    def _stale(self, w, hours=30):
+        from datetime import datetime, timezone, timedelta
+        s = SweepStore()
+        when = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        for x in w:
+            s.checked[x.key] = {"at": when, "empty": True, "blank": True,
+                                "healthy": True}
+        return s
+
+    def test_an_untried_window_outranks_a_tried_one(self):
+        w = windows(6)
+        s = self._stale(w)
+        s.focus_tries[w[0].key] = 1          # earliest, but already tried
+        first = focus_pending(w, s, [1], max_age_hours=6)[0]
+        assert first.key != w[0].key, (
+            "it went back to a window it had already priced")
+
+    def test_the_first_pass_covers_everything_before_any_repeat(self):
+        w = windows(20)
+        s = self._stale(w)
+        picked = []
+        for _ in range(20):
+            pend = focus_pending(w, s, [1], max_age_hours=6)
+            nxt = pend[0]
+            s.focus_tries[nxt.key] = sweeper._tries(s, nxt.key) + 1
+            picked.append(nxt.key)
+        assert len(set(picked)) == 20, (
+            f"only {len(set(picked))} distinct windows in 20 picks")
+
+    def test_month_order_still_holds_inside_the_first_pass(self):
+        """The documented guarantee: January finishes before February."""
+        from datetime import date, timedelta as td
+        w = []
+        for m in (1, 2):
+            for i in range(4):
+                d = date(2027, m, i + 1)
+                w.append(Window(d, d + td(days=27)))
+        s = self._stale(w)
+        months = [x.depart.month
+                  for x in focus_pending(w, s, [1, 2], max_age_hours=6)]
+        assert months == sorted(months), months
+
+    def test_a_second_pass_is_still_ordered_by_month(self):
+        w = windows(6)
+        s = self._stale(w)
+        for x in w:
+            s.focus_tries[x.key] = 1         # everything tried once
+        order = [x.depart for x in focus_pending(w, s, [1], max_age_hours=6)]
+        assert order == sorted(order)

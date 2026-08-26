@@ -156,9 +156,9 @@ Black Friday, a flash sale:
 # 1. stop the sweep cleanly (never kill it)
 python sweep_forever.py --stop
 
-# 2. re-price the priority months, anything answered over 6 h ago.
+# 2. re-price the priority months, anything answered over 12 h ago.
 #    --delay MUST be repeated: a restart drops to the default rate.
-python sweep_forever.py --focus 1,2,3 --focus-max-age 6 --delay 5
+python sweep_forever.py --focus 1,2,3 --focus-max-age 12 --delay 5
 
 # 3. watch it, in another window
 python sweep_forever.py --watch
@@ -168,10 +168,25 @@ python -m tracker.cli --email-now
 ```
 
 **Repeat `--delay`.** A restart uses the default, not the rate you were
-running at, and that is the difference between ~5 hours and ~16. The sweep
+running at, and that is the difference between ~6 hours and ~19. The sweep
 prints a warning when the two differ, but the flag is the fix. The rate is
 deliberately not remembered: the boot launcher passes no `--delay` so a
 reboot always comes back at the safe default.
+
+**Which age to ask for.** Simulated over the real 1,089 January–March
+windows at `--delay 5`:
+
+| `--focus-max-age` | windows | finishes in |
+|---|---|---|
+| 24 | 292 | ~2 h |
+| **12** | **854** | **~5.6 h** |
+| 6 | 1,089 | all priced by ~7 h, then keeps re-pricing |
+
+12 is the sweet spot: it re-prices everything not seen since yesterday and
+**stops**. A smaller number is not more thorough so much as endless —
+windows go stale again while the focus is still running, so it keeps
+finding work. The focus prices everything once before re-pricing anything,
+so you get full coverage first either way.
 
 `--email-now` reads only what is already on disk — **it makes no requests
 to Google**, so it cannot be throttled, never competes with the sweep, and

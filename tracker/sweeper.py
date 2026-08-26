@@ -1287,9 +1287,22 @@ def focus_pending(windows: Sequence, store: "SweepStore",
         # waiting on it, so the focus can actually end.
         if _tries(store, w.key) >= max_tries:
             continue
-        out.append((i, w.depart, w.back, w))
-    out.sort(key=lambda t: (t[0], t[1], t[2]))
-    return [t[3] for t in out]
+        out.append((_tries(store, w.key), i, w.depart, w.back, w))
+    # Breadth before depth: everything once before anything twice.
+    #
+    # Without the try count leading the sort this is month-then-date, which
+    # always returns the earliest stale window - and under `max_age_hours`
+    # windows go stale *while the focus is still running*, so it re-prices
+    # January over and over and reaches March last. Simulated 2026-08-26 at
+    # the real pace over the real 1,089 January-March windows: 2,913 picks
+    # across 19.2 hours, January priced three times each and March once.
+    #
+    # Ordering by tries first makes the first pass complete before any
+    # second look begins: 1,089 picks, ~7 h, every window fresh. The
+    # month-then-date order is preserved inside each try level, so January
+    # still finishes before February on that first pass.
+    out.sort(key=lambda t: (t[0], t[1], t[2], t[3]))
+    return [t[4] for t in out]
 
 
 def next_window(windows: Sequence, store: "SweepStore", *,
