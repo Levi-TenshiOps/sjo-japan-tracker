@@ -107,3 +107,41 @@ class TestTheEmailUsesIt:
                / "tracker" / "email_render.py").read_text(encoding="utf-8")
         assert "verified[:6]" not in src, "a magic 6 is back"
         assert "verified[:VERIFIED_ROWS]" in src
+
+
+class TestTheChromeAndSweepMergeDoesNotDuplicate:
+    """One window must produce one row, whichever source priced it.
+
+    The merge keyed on (depart, return, price), so a window Chrome had just
+    re-priced at $1,347 sat beside the sweep's $1,349 from three hours
+    earlier: the same flight twice, two of ten visible rows spent on it,
+    and no way for the reader to tell which number was true.
+
+    Chrome's is the live one, so it wins.
+    """
+
+    def test_the_merge_keys_on_the_window_alone(self):
+        import pathlib
+        import re
+        src = re.sub(r"\s+", " ", (pathlib.Path(__file__).resolve().parent.parent
+                                   / "tracker" / "cli.py").read_text(encoding="utf-8"))
+        assert "known = {(o.depart_date, o.return_date) for o in verified}" in src
+        assert "o.return_date, o.price_usd) for o in verified}" not in src, (
+            "the merge still keys on price, so a re-priced window duplicates")
+
+    def test_the_same_window_at_two_prices_yields_one_row(self):
+        """The behaviour, modelled the way cli.py does it."""
+        chrome = [opt(1347, 1, day=29)]
+        sweep = [opt(1349, 1, day=29), opt(1500, 11, day=14)]
+        known = {(o.depart_date, o.return_date) for o in chrome}
+        fresh = [o for o in sweep if (o.depart_date, o.return_date) not in known]
+        merged = sorted(chrome + fresh, key=lambda o: o.price_usd)
+        assert len(merged) == 2, "the re-priced window appeared twice"
+        assert merged[0].price_usd == 1347, "the stale price won"
+
+    def test_a_window_only_the_sweep_has_still_appears(self):
+        chrome = [opt(1347, 1, day=29)]
+        sweep = [opt(1500, 11, day=14)]
+        known = {(o.depart_date, o.return_date) for o in chrome}
+        fresh = [o for o in sweep if (o.depart_date, o.return_date) not in known]
+        assert len(chrome + fresh) == 2

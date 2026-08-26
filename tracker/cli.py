@@ -712,9 +712,18 @@ def run(argv: list[str] | None = None) -> int:
         log.debug("sweep store unreadable (%s); continuing without it", exc)
         swept = []
     if swept:
-        known = {(o.depart_date, o.return_date, o.price_usd) for o in verified}
+        # De-duplicate by *window*, not by (window, price). Including the
+        # price meant that when Chrome re-priced a window the sweep already
+        # held at a slightly different number, the same flight appeared
+        # twice - $1,347 live beside $1,349 from three hours ago - burning
+        # two of the ten visible rows on one itinerary and inviting the
+        # reader to wonder which is true.
+        #
+        # Chrome's row wins because it is the live one; the sweep's is
+        # dropped rather than shown alongside.
+        known = {(o.depart_date, o.return_date) for o in verified}
         fresh = [o for o in swept
-                 if (o.depart_date, o.return_date, o.price_usd) not in known]
+                 if (o.depart_date, o.return_date) not in known]
         log.info("Background sweep contributed %d window(s); cheapest %s",
                  len(fresh), format_price(min(o.price_usd for o in swept)))
         verified = sorted(verified + fresh, key=lambda o: o.price_usd)
