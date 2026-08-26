@@ -94,7 +94,24 @@ class TestItActuallyFires:
     A safety net nobody has watched fire is not a safety net - and this
     one exists specifically so a rate experiment stops itself when nobody
     is reading the log.
+
+    Everything the run needs is built here. The first version of this test
+    borrowed the developer's own `preferences.json`, which is gitignored by
+    non-negotiable #8 (no personal data in tracked files), so CI had no copy
+    and `main()` returned 2 before the loop ever started - `seen` came back
+    empty and the whole suite went red on every push. A test that reads the
+    machine it was written on is not a test.
     """
+
+    def _prefs(self, tmp_path):
+        from tracker.preferences import Preferences
+        p = Preferences(alert_email="a@b.c", search_months=12,
+                        min_lead_days=21, departure_step_days=1,
+                        trip_weeks=[3], extra_nights=[],
+                        destinations=["TYO"], priority_months=[])
+        path = tmp_path / "preferences.json"
+        p.save(path)
+        return path
 
     def test_a_rest_during_a_batch_lowers_the_next_batch_rate(
             self, tmp_path, monkeypatch, caplog):
@@ -110,33 +127,39 @@ class TestItActuallyFires:
             return 1
 
         monkeypatch.setattr(sweep_forever, "sweep_batch", fake_batch)
-        # The real sweeper may well be running. Its single-instance guard
-        # firing here is correct behaviour, but it is not what this test is
-        # about, so stand it down rather than collide with it.
+        # CI has no browser, and this test is not about finding one.
+        monkeypatch.setattr(sweep_forever, "chrome_path",
+                            lambda *a, **k: "/nonexistent/chrome")
+        # The real sweeper may well be running on a developer machine. Its
+        # single-instance guard firing here is correct behaviour, but it is
+        # not what this test is about, so stand it down.
         monkeypatch.setattr(sweep_forever, "another_sweeper_running",
                             lambda *a, **k: None)
         monkeypatch.setattr(sweep_forever, "claim_instance", lambda *a, **k: None)
         monkeypatch.setattr(sweep_forever, "release_instance", lambda *a, **k: None)
         monkeypatch.setattr(sweep_forever.time, "sleep", lambda *_: None)
 
-        store_path = tmp_path / "store.json"
         # --log defaults to the *production* sweep.log, and the handler is
         # added to the root logger and never removed. Without this, calling
         # main() here writes every later test's log output into the live
-        # file: on 2026-08-25 that put 181 fake "that is a throttle"
+        # file: on 2026-08-25 that put 182 fake "that is a throttle"
         # warnings and four "the background sweep has stopped" alarms into
         # the real log, and they were read as a real throttle.
+        #
+        # --focus none keeps the run independent of config.yaml's own
+        # sweep_focus_months, which would otherwise steer the picks.
         argv = ["sweep_forever.py", "--once", "--delay", "15",
-                "--store", str(store_path), "--log", ""]
+                "--store", str(tmp_path / "store.json"),
+                "--preferences", str(self._prefs(tmp_path)),
+                "--focus", "none", "--log", ""]
         monkeypatch.setattr(sweep_forever.sys, "argv", argv)
 
         with caplog.at_level(logging.WARNING):
-            sweep_forever.main()
+            rc = sweep_forever.main()
 
+        assert rc == 0, f"main() bailed out with {rc} before the loop"
         assert seen == [15.0], "the first batch must run at the rate asked for"
-        assert any("TRIPWIRE" in r.message for r in caplog.records), \
-            "a rest went unremarked"
+        assert any("TRIPWIRE" in r.message for r in caplog.records),             "a rest went unremarked"
 
-        # And the store carries the backed-off rate for the read-only views.
-        from tracker.sweeper import SweepStore, slower_rate_step
+        from tracker.sweeper import slower_rate_step
         assert slower_rate_step(15.0) == 25.0
