@@ -193,6 +193,10 @@ class SweepStore:
     # did not turn into an option. Distinct from rows Google never
     # sent: this half would be a parser bug, and fixable for free.
     rows_missed_by_parser: int = 0
+    # Rows Google itself says it cannot price ("Total price is
+    # unavailable"). Counted apart from a parse failure: there is nothing
+    # to read in them, and every one seen so far transits the US anyway.
+    rows_unpriced: int = 0
     # Rows collapsed as duplicates. Harmless for finding the cheapest
     # fare - a second option at the same price, routing, airline and
     # duration is the same deal - but it inflates the apparent gap.
@@ -1556,13 +1560,15 @@ def sweep_batch(
             rows = dom_row_count(dom)
             dup = stats.get("duplicate", 0)
             unmatched = stats.get("unmatched", 0)
+            unpriced = stats.get("unpriced", 0)
             if unmatched:
                 store.rows_missed_by_parser += unmatched
+            store.rows_unpriced += unpriced
             store.rows_deduped += dup
             log.info("%s +%dn: Google claims %d, DOM %d rows, parsed %d "
-                     "(%d duplicate, %d unreadable) - %s",
+                     "(%d duplicate, %d unpriced, %d unreadable) - %s",
                      depart, (ret - depart).days, claimed, rows, len(parsed),
-                     dup, unmatched, verdict)
+                     dup, unpriced, unmatched, verdict)
         blind = unreadable_count(parsed)
         if blind:
             store.unreadable += blind

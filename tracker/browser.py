@@ -229,6 +229,11 @@ def _minutes(text: str) -> int:
 # returned"). Comparing it against what we parsed is the only way to notice
 # that a window was under-collected: measured 2026-08-23 a live page claimed
 # 16 while the parser found 13, and nothing anywhere said so.
+# Google's own wording for a routing it cannot price. Distinct from a row
+# we failed to parse, and counted apart from one.
+_NO_PRICE = re.compile(r"price is unavailable", re.I)
+
+
 _PRICE_ONLY = re.compile(r"(\d[\d,]*) US dollars")
 _CLAIMED = re.compile(r"(\d{1,4})\s+results?\s+(?:returned|found)", re.I)
 
@@ -354,7 +359,22 @@ def parse_options(
         master = _MASTER.search(labels)
         if not master:
             if stats is not None:
-                stats["unmatched"] = stats.get("unmatched", 0) + 1
+                # Google says outright when it has no price for a routing:
+                # "Total price is unavailable. 2 stops flight with American
+                # and JAL ... Dallas Fort Worth ... Chicago O'Hare". That is
+                # not a row we failed to read, it is a row with nothing to
+                # read - and every one seen so far transits the US, so the
+                # visa rule would drop it regardless.
+                #
+                # Counting it as a parse failure matters, because
+                # `rows_missed_by_parser` is what raises "results are
+                # arriving in a format we cannot read". Measured 2026-08-25:
+                # 39 windows had exactly two such rows each - one logical
+                # row, twice, the DOM carrying everything double - and the
+                # counter had climbed to 20 against an alarm at 25. The
+                # first email that alarm ever sent would have been false.
+                key = "unpriced" if _NO_PRICE.search(labels) else "unmatched"
+                stats[key] = stats.get(key, 0) + 1
             continue
         price = int(master.group(1).replace(",", ""))
         airline = master.group(3).strip()

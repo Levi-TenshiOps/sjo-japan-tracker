@@ -1804,6 +1804,45 @@ would have crashed the run *after* composing the email and before saving
 the state. Found by grepping every use of the name rather than by testing
 the path, which is the only way to find a crash nobody can trigger yet.
 
+## The parser alarm's first email would have been a false one
+
+Found 2026-08-25, chasing the one counter that was moving:
+`rows_missed_by_parser` had climbed from 0 to 20 against an alarm at 25.
+
+The shape gave it away before the cause did. **39 windows, every one with
+exactly two unreadable rows** - never one, never three. The DOM carries
+every result twice, so that is one logical row, consistently present.
+
+Captured live, it is this:
+
+    Total price is unavailable. 2 stops flight with American and JAL.
+    ... Layover at Dallas Fort Worth ... Chicago O'Hare ...
+
+**Nothing was being lost.** Google says outright that it cannot price the
+routing, so there is no fare in the row to read - and every instance seen
+transits the US, which the visa rule drops anyway.
+
+But `rows_missed_by_parser` is what raises *"results are arriving in a
+format we cannot read"*, an alarm whose whole meaning is "Google's markup
+moved and real fares are going missing". Firing it on rows Google itself
+declines to price would have been the fourth false alarm this project has
+sent, and the first from an alarm added only the day before.
+
+`_NO_PRICE` separates them: `stats["unpriced"]` for a row with nothing to
+read, `stats["unmatched"]` for markup that has genuinely changed. The
+alarm reads only the second, and `--status` reports both.
+
+**The lesson, again, in a new costume: a counter that drives an alarm must
+count the thing the alarm claims.** The fast-empty detector counted the
+calendar, the ledger's `empty` counted the visa filter, the grid's empty
+rate counted a fetch-method limit - and this counted Google's own
+"no price available". Four instances now of the same mistake: measuring
+something adjacent to the thing you mean and alarming on it.
+
+**How it was found matters too.** Not from a test, and not from reading -
+from noticing that a number was moving and that its *shape* (always
+exactly two) was too regular to be random.
+
 ## Layout
 
 ```
