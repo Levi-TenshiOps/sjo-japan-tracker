@@ -2064,13 +2064,20 @@ a day**, not 120. `choose_targets` can only offer it wide-net hints (0-3),
 the hot list, and whatever the grid returned - and `hot_list_size` is 8, so
 the candidate pool is capped well below the budget it is drawing on.
 
-Two knobs that should agree and do not. Raising `hot_list_size` to ~18 would
-fill the budget and roughly double the windows verified fresh each run,
-which is the only channel that sees the cheap European routings. It also
-raises traffic on the address, and `hot_keys` feeds the HTTP grid's hot
-windows too, so it is a deliberate decision rather than a tidy-up - and not
-one to take while the health line is above ~20%. Left as-is for now, but do
-not repeat the "120 a day" figure. Everything else
+Two knobs that should agree and did not. **Raised to 18 on 2026-08-25**,
+once the focus finished and the reason became concrete: the cheapest fare
+in the project, $1,347, was 25.5 hours old and about to be dropped from the
+evening email, because only the top eight were guaranteed a Chrome refresh
+and everything below that depended on the sweep having happened to touch it
+within `sweep_max_age_hours`.
+
+It costs almost nothing, which is the point - it fills a budget that
+already existed rather than asking for a new one. 11 launches a run against
+a ceiling of 20, ~66 a day, beside the sweep's ~1,600.
+
+**Change it in `config.yaml`, not `tracker/config.py`.** The YAML wins, and
+editing only the dataclass default looks like it worked and changes
+nothing - which it did, for one confusing minute. Everything else
 is priced by HTTP, whose numbers run hundreds of dollars high. So the email
 leads with the Chrome block and labels the HTTP table an upper bound. Do
 not quote an HTTP price as "the cheapest" anywhere.

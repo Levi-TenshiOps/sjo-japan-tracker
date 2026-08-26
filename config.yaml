@@ -22,7 +22,13 @@ min_layover_min: 75      # reject connections too tight to actually make
 
 # Coverage strategy. The cheapest known windows are re-priced every run;
 # the rest of the search space rotates one slice at a time.
-hot_list_size: 8
+# Cheapest windows re-priced through Chrome every run. This is what keeps
+# the top of the email a live price rather than one the sweep happened to
+# see earlier. Raised 8 -> 18 on 2026-08-25: the cheapest fare of all was
+# 25.5 h old and about to drop out of the evening email, because only the
+# top eight were guaranteed a refresh. chrome_max_per_run is 20 and only
+# 5-13 of it was being spent, so this fills a budget that already existed.
+hot_list_size: 18
 hot_share: 0.4          # rest splits between priority and general pools
 deep_hub_sweep: true
 request_delay_seconds: 3.0

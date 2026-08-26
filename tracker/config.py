@@ -71,7 +71,22 @@ class Config:
     ntfy_topic: str = ""
 
     # coverage strategy
-    hot_list_size: int = 8       # cheapest windows re-priced every run
+    # The cheapest windows re-priced through Chrome on every run. This is
+    # what guarantees the top of the email is a *live* price rather than
+    # one the sweep happened to see earlier - anything outside it depends
+    # on the sweep having touched it within sweep_max_age_hours, and drops
+    # off the email when it has not.
+    #
+    # Raised 8 -> 18 on 2026-08-25, after the focus finished and the
+    # cheapest fare of all ($1,347) was found to be 25.5 h old and about to
+    # be dropped from the evening email. Eight covered the top eight; the
+    # rows below that were dependent on luck.
+    #
+    # It costs almost nothing. `chrome_max_per_run` is 20 and only 5-13 of
+    # it was being spent, so this fills a budget that already existed:
+    # ~66 Chrome launches a day against a ceiling of 120, and against
+    # ~1,600 requests a day from the sweep.
+    hot_list_size: int = 18
     hot_share: float = 0.5       # fraction of the budget spent on them
 
     # The wide net: one plain-text query per month, asking Google for its own
