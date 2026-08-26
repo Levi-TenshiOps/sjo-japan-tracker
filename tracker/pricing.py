@@ -100,6 +100,29 @@ class PriceBands:
         return replace(self, seen_low=int(round(min(clean))),
                        seen_high=int(round(max(clean))))
 
+    def extend_observed(self, prices: Sequence[float]) -> "PriceBands":
+        """A copy whose observed range also covers `prices`.
+
+        `with_observed` *replaces* the range, which is right when it is
+        handed the whole population at once. It is wrong when a second
+        source arrives later, and one always does: `cli.run` computes the
+        bands from the CSVs and only afterwards launches Chrome, which is
+        the one thing that finds the record fares. On 2026-08-26 the email
+        led with $1,336 above a bar whose cheap band read "$1,343 -
+        $2,213" - the headline fare sat below the floor of its own gauge.
+
+        That is the defect this project already named twice: a band the
+        data cannot reach is a broken gauge. Here the data could reach it;
+        the gauge was simply built before the data arrived.
+        """
+        clean = [float(p) for p in prices if p and float(p) > 0]
+        if not clean:
+            return self
+        lows = [min(clean)] + ([self.seen_low] if self.seen_low else [])
+        highs = [max(clean)] + ([self.seen_high] if self.seen_high else [])
+        return replace(self, seen_low=int(round(min(lows))),
+                       seen_high=int(round(max(highs))))
+
     def classify(self, price_usd: float) -> Band:
         if price_usd < self.low:
             return "CHEAP"

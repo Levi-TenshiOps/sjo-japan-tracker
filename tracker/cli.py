@@ -728,6 +728,14 @@ def run(argv: list[str] | None = None) -> int:
                  len(fresh), format_price(min(o.price_usd for o in swept)))
         verified = sorted(verified + fresh, key=lambda o: o.price_usd)
 
+    # Fold everything the email will actually show back into the gauge. The
+    # bands are computed from the CSVs long before Chrome runs, so without
+    # this the bar is drawn from yesterday's population: on 2026-08-26 the
+    # email led with $1,336 over a cheap band reading "$1,343 - $2,213",
+    # putting its own headline below the floor of its own scale.
+    if verified:
+        bands = bands.extend_observed([o.price_usd for o in verified])
+
         cheap = verify_mod.under(verified, cfg.good_price_usd)
         if cheap:
             log.info("CHROME FOUND %d fare(s) at or under %s:",
