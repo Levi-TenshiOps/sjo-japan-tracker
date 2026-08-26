@@ -231,6 +231,14 @@ class SweepStore:
     # key -> {at, empty, healthy}. Every check, not just the finds.
     checked: dict = field(default_factory=dict)
     consecutive_rests: int = 0
+    #: Every rest ever taken, and the only rest counter that is never reset.
+    #: `consecutive_rests` is deliberately cleared on recovery and by
+    #: `forget_stale_health`, which makes it useless for "has a new rest
+    #: happened since I last looked": after one rest and one recovery it
+    #: returns to 0, so the next rest reads as 1 again and compares equal to
+    #: what was already seen. The rate tripwire watched it and would have
+    #: fired exactly once, then stayed dead for the life of the process.
+    rests_total: int = 0
     throttled_since: str = ""
     #: The delay the sweep is really pacing at, written every batch. The
     #: read-only views run in their own process with their own --delay
@@ -1877,6 +1885,7 @@ def sweep_batch(
                 # that is already refusing is how a soft throttle becomes a
                 # hard block, and the scheduled runs share this IP.
                 store.consecutive_rests += 1
+                store.rests_total += 1
                 log.warning("Still throttled after %.0f min - resting %.0f min "
                             "(rest #%d). %d window(s) waiting to be re-checked.",
                             stuck_s / 60, rest_for / 60,

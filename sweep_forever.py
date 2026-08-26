@@ -498,17 +498,23 @@ def main() -> int:
 
     # --- the rate tripwire -------------------------------------------------
     # Raising the rate is an experiment, and an experiment needs a stop
-    # condition that does not depend on somebody watching. `consecutive_rests`
-    # only ever goes up when the sweep has given up and stopped for a while,
-    # so a rise in it is the one unambiguous "Google is refusing" signal the
-    # store carries. When it moves, drop a rung.
+    # condition that does not depend on somebody watching. A rest is taken
+    # only after the sweep has been throttled for a sustained stretch, so a
+    # new one is the least ambiguous "Google is refusing" signal the store
+    # carries - much stronger than a throttle *detection*, which this
+    # project has had several false ones of.
     #
     # Deliberately one-way for the life of the process. Speeding back up after
     # a quiet stretch would be reading a cleared health sample as an all-clear
     # - the same mistake as the recovery email that described the wrong
     # throttle.
     current_delay = args.delay
-    rests_seen = store.consecutive_rests
+    # `rests_total`, never `consecutive_rests`: the latter is cleared on
+    # recovery and by forget_stale_health, so after one rest and one recovery
+    # it returns to 0 and the next rest reads as 1 - equal to what was
+    # already seen, not greater. The tripwire fired once and then never
+    # again, which is precisely the case it exists for.
+    rests_seen = store.rests_total
     _backoff = slower_rate_step(current_delay)
     if _backoff is not None:
         log.info("Rate tripwire armed: at --delay %.0fs (~%.0f req/day), "
@@ -539,22 +545,22 @@ def main() -> int:
             log.warning("batch failed (%s); pausing 60s", exc)
             time.sleep(60)
 
-        if store.consecutive_rests > rests_seen:
-            rests_seen = store.consecutive_rests
+        if store.rests_total > rests_seen:
+            rests_seen = store.rests_total
             backed = slower_rate_step(current_delay)
             if backed is not None:
                 log.warning("TRIPWIRE: rest #%d at --delay %.0fs. Backing the "
                             "rate off to %.0fs (%.0f -> %.0f req/day) for the "
                             "rest of this process. Restart with an explicit "
                             "--delay to override.",
-                            store.consecutive_rests, current_delay, backed,
+                            store.rests_total, current_delay, backed,
                             86400 / (current_delay + LAUNCH_SECONDS),
                             86400 / (backed + LAUNCH_SECONDS))
                 current_delay = backed
             else:
                 log.warning("TRIPWIRE: rest #%d, but --delay %.0fs is already "
                             "the slowest rung; not backing off further.",
-                            store.consecutive_rests, current_delay)
+                            store.rests_total, current_delay)
 
         dropped = store.prune()
 

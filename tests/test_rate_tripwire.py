@@ -62,7 +62,10 @@ class TestTheTripwireIsWiredIn:
 
     def test_a_new_rest_lowers_the_rate(self):
         src = self._src()
-        assert "if store.consecutive_rests > rests_seen:" in src
+        assert "if store.rests_total > rests_seen:" in src
+        # consecutive_rests is reset on recovery, so watching it makes the
+        # tripwire a one-shot. See test_it_keeps_firing_after_a_recovery.
+        assert "if store.consecutive_rests > rests_seen:" not in src
         assert "current_delay = backed" in src
 
     def test_it_never_speeds_back_up(self):
@@ -122,8 +125,10 @@ class TestItActuallyFires:
 
         def fake_batch(windows, store, **kw):
             seen.append(kw["delay_s"])
-            # Google started refusing: the sweep gave up and rested.
+            # Google started refusing: the sweep gave up and rested. Both
+            # counters move, exactly as the real rest path does.
             store.consecutive_rests += 1
+            store.rests_total += 1
             return 1
 
         monkeypatch.setattr(sweep_forever, "sweep_batch", fake_batch)
@@ -163,3 +168,58 @@ class TestItActuallyFires:
 
         from tracker.sweeper import slower_rate_step
         assert slower_rate_step(15.0) == 25.0
+
+    def test_it_keeps_firing_after_a_recovery(self, tmp_path, monkeypatch, caplog):
+        """The bug this test exists for.
+
+        `consecutive_rests` is reset to 0 on recovery and by
+        `forget_stale_health`. The tripwire originally watched it, so:
+
+            rest #1  consecutive_rests 1 > 0  -> fires, 15 -> 25
+            recovery consecutive_rests reset to 0
+            rest #2  consecutive_rests 1 > 1  -> FALSE, never fires again
+
+        It backed off exactly once and then sat there for the life of the
+        process. The documented 15 -> 25 -> 40 -> 60 -> 90 ladder could not
+        happen. `rests_total` is never reset, which is the whole point.
+        """
+        import logging
+        import sweep_forever
+
+        seen: list[float] = []
+        calls = {"n": 0}
+
+        def fake_batch(windows, store, **kw):
+            seen.append(kw["delay_s"])
+            calls["n"] += 1
+            store.consecutive_rests += 1
+            store.rests_total += 1
+            # Google recovers between rests, exactly as production does.
+            store.consecutive_rests = 0
+            if calls["n"] >= 4:
+                raise KeyboardInterrupt
+            return 1
+
+        monkeypatch.setattr(sweep_forever, "sweep_batch", fake_batch)
+        monkeypatch.setattr(sweep_forever, "chrome_path",
+                            lambda *a, **k: "/nonexistent/chrome")
+        monkeypatch.setattr(sweep_forever, "another_sweeper_running",
+                            lambda *a, **k: None)
+        monkeypatch.setattr(sweep_forever, "claim_instance", lambda *a, **k: None)
+        monkeypatch.setattr(sweep_forever, "release_instance", lambda *a, **k: None)
+        monkeypatch.setattr(sweep_forever.time, "sleep", lambda *_: None)
+
+        argv = ["sweep_forever.py", "--delay", "15",
+                "--store", str(tmp_path / "store.json"),
+                "--preferences", str(self._prefs(tmp_path)),
+                "--focus", "none", "--log", ""]
+        monkeypatch.setattr(sweep_forever.sys, "argv", argv)
+
+        with caplog.at_level(logging.WARNING):
+            try:
+                sweep_forever.main()
+            except KeyboardInterrupt:
+                pass
+
+        assert seen == [15.0, 25.0, 40.0, 60.0], (
+            f"the ladder stalled: {seen}")
