@@ -804,11 +804,24 @@ def watch_lines(windows: Sequence, store: "SweepStore", *,
     return out
 
 
-#: The rate ladder, seconds between launches, slowest first. 15s is the
-#: floor on purpose: below it the gain curve flattens (each step buys less
-#: coverage than the last) while the traffic shape gets steadily harder to
-#: pass off as a person. Reaching 10s is possible and not worth the risk.
-RATE_LADDER = (90.0, 60.0, 40.0, 25.0, 15.0)
+#: The rate ladder, seconds between launches, slowest first.
+#:
+#: The floor was 15s on the reasoning that gains below it flatten. Measured
+#: 2026-08-25 against the live window set, that was simply false - the
+#: chance of catching a fare that lasts one day runs 40% / 55% / 74% / 89%
+#: / 100% at 40 / 25 / 15 / 10 / 5 seconds. The curve steepens.
+#:
+#: So the floor is a *risk* judgement, not a value one, and 10s is where it
+#: sits: ~3,600 requests a day, half the ~7,200 that throttled this address
+#: on 2026-08-23, and that day also had a fresh browser profile every
+#: launch and two processes competing - both since fixed.
+#:
+#: Below 10s the margin against a known-bad rate stops being comfortable
+#: and the traffic shape gets harder to pass off as a person. Note also
+#: that a page costs LAUNCH_SECONDS (~14s) on its own, so the delay is no
+#: longer the dominant term: even --delay 0 only reaches ~6,200/day. The
+#: last rungs buy less throughput than their numbers suggest.
+RATE_LADDER = (90.0, 60.0, 40.0, 25.0, 15.0, 10.0)
 
 
 def next_rate_step(current: float) -> float | None:

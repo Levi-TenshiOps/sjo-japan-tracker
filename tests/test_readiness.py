@@ -266,7 +266,10 @@ class TestTheAdviceMatchesTheLiveSettings:
         assert "leave it" in joined
 
     def test_at_the_floor_it_says_there_is_nothing_to_raise(self):
-        _, lines = run(delay_s=15.0, hot_list_size=18)
+        # Derived from the ladder, not written down: the floor moved 15 -> 10
+        # on 2026-08-25 when the coverage curve was actually measured, and a
+        # hardcoded 15.0 here then asserted the opposite of the new advice.
+        _, lines = run(delay_s=min(RATE_LADDER), hot_list_size=18)
         joined = " ".join(lines)
         assert "nothing left to raise" in joined
         assert "the floor" in joined
