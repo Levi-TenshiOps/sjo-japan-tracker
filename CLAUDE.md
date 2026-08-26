@@ -656,6 +656,41 @@ Three lessons, in order of how much they cost:
    reported was true and the thing the trip owner actually receives had
    been dead for hours.
 
+## Three ways to measure the sweep rate, two of them wrong
+
+Asked on 2026-08-26 whether the rate was healthy. Answering it produced
+three different numbers in ten minutes - 1,070, 3,950 and 3,168 requests a
+day - from the same running sweep. Worth recording, because the two wrong
+methods both look obviously correct.
+
+**The check ledger cannot measure elapsed time.** `store.checked` is keyed
+by window, so re-pricing a window *overwrites* its earlier timestamp. Sort
+the surviving entries by time and the gaps between them include every hole
+left by a window that was later re-checked. Measured that way the sweep
+looked like 1,070/day with a median gap of exactly 60.0s - and that 60.0
+is itself a red herring, close enough to `time.sleep(60)` to send anyone
+hunting a spin that is not there. The per-entry `secs` field is fine; it is
+only *differences between entries* that are meaningless.
+
+**`sweep_history.csv` logs options, not windows.** It carries ~3 rows per
+window, so counting rows gives ~12,000/day. Counting distinct
+`(depart_date, return_date)` is closer but still needs dividing by the
+fare rate to recover checks, and that rate moves with the calendar - it was
+83% in one 15-minute stretch and 47% over the three hours around it.
+
+**`windows_priced` is monotonic and is the answer.** Sample it twice:
+
+    t=0    windows_priced=3971
+    t=300  windows_priced=3982      -> 27.3s/window, 3,168/day
+
+That agreed within 3% with `delay_s + LAUNCH_SECONDS` (28.2s), which is
+the cheap check and can be trusted. Two independent methods agreeing is
+what settled it; either one alone had already been wrong once.
+
+The general rule, and this file's oldest one in a new costume: **before
+reading a number as a measurement, ask what the data structure can
+physically record.** A dict keyed by window cannot record history.
+
 ## Will we catch a price drop that lasts a day or two?
 
 The trip owner's question, and the right one. For a fare that persists D
