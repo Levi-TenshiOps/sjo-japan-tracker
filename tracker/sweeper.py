@@ -768,6 +768,25 @@ def watch_lines(windows: Sequence, store: "SweepStore", *,
                 out.append("  (watching for a rate...)")
         else:
             out.append("  (watching for a rate...)")
+    elif store.draining:
+        # The cold cursor is frozen, so a pass ETA would be a lie - the same
+        # reason the focus gets its own line. Rate the drain by the queue.
+        if started and len(started) > 3:
+            t0, q0 = started[0], started[3]
+            hours = (now - t0).total_seconds() / 3600.0
+            cleared = q0 - len(store.suspect)
+            if hours > 0 and cleared > 0:
+                per_hour = cleared / hours
+                eta = len(store.suspect) / per_hour
+                out.append(f"  DRAINING re-checks: {per_hour:.0f} cleared/hour "
+                           f"observed   ~{eta:.1f} h left   the full sweep is "
+                           f"paused until it finishes")
+            else:
+                out.append("  DRAINING re-checks; the full sweep is paused "
+                           "(watching for a rate...)")
+        else:
+            out.append("  DRAINING re-checks; the full sweep is paused "
+                       "(watching for a rate...)")
     elif rate:
         left = max(total - done, 0)
         eta = left / rate
@@ -784,6 +803,15 @@ def watch_lines(windows: Sequence, store: "SweepStore", *,
     # question actually being asked. "walked" is not the same as "known":
     # a window that came back empty while the connection was in doubt is
     # queued for a second look rather than believed.
+    # "with a fare" and "re-check" are facts about the *store*, not about
+    # where the cursor happens to be, and counting them under `i < cursor`
+    # made the table contradict the header the moment a pass wrapped: the
+    # cursor resets to 0, so four windows were inspected and every month
+    # reported 0 fares and 0 re-checks while the line above it said 405
+    # remembered and 291 queued. Spotted by the trip owner, 2026-08-26.
+    #
+    # Only `walked` is cursor-relative, and it is honest: it is progress
+    # through *this* pass, which really is near zero just after a wrap.
     queued = set(store.suspect)
     months: dict = {}
     for i, w in enumerate(windows):
@@ -793,10 +821,10 @@ def watch_lines(windows: Sequence, store: "SweepStore", *,
         row["total"] += 1
         if i < store.cursor:
             row["walked"] += 1
-            if w.key in store.found:
-                row["fare"] += 1
-            elif w.key in queued:
-                row["again"] += 1
+        if w.key in store.found:
+            row["fare"] += 1
+        elif w.key in queued:
+            row["again"] += 1
     out.append("")
     out.append(f"  {'month':9}{'walked':>14}{'with a fare':>13}{'re-check':>10}")
     for key in sorted(months, key=lambda k: (k[5:], k)):

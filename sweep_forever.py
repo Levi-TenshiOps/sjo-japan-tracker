@@ -296,9 +296,14 @@ def main() -> int:
             while True:
                 snap = SweepStore.load(args.store)
                 if started is None:
+                    # (when, cursor, focus backlog, re-check queue). The
+                    # last two are baselines: the cold cursor is frozen
+                    # during a focus *and* during a post-pass drain, so the
+                    # only honest rate is the one for the work being done.
                     started = (datetime.now(timezone.utc), snap.cursor,
                                len(focus_pending(windows, snap, focus_months))
-                               if focus_months else 0)
+                               if focus_months else 0,
+                               len(snap.suspect))
                 lines = watch_lines(windows, snap,
                                     threshold=prefs.good_price_usd,
                                     delay_s=(snap.delay_s or args.delay),
