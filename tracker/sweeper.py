@@ -239,6 +239,15 @@ class SweepStore:
     #: what was already seen. The rate tripwire watched it and would have
     #: fired exactly once, then stayed dead for the life of the process.
     rests_total: int = 0
+    #: A pass has finished and the queued re-checks are being drained before
+    #: the next one starts. Set at the cursor wrap, cleared when nothing in
+    #: the queue is worth another look.
+    draining: bool = False
+    drain_started: str = ""
+    #: {key: tries *in this drain*}. Per-drain, not lifetime: a window that
+    #: exhausted its tries last time deserves a fresh look on the next pass,
+    #: when the connection may be entirely different.
+    drain_tries: dict[str, int] = field(default_factory=dict)
     throttled_since: str = ""
     #: The delay the sweep is really pacing at, written every batch. The
     #: read-only views run in their own process with their own --delay
@@ -487,9 +496,15 @@ class SweepStore:
 
     def progress(self, total: int) -> str:
         pct = (100.0 * self.cursor / total) if total else 0.0
+        # Say so when the cold cursor is frozen on purpose. The focus taught
+        # this the hard way: a bar that does not move reads as a stalled
+        # sweep, and this project has spent hours on that misreading before.
+        drain = (f", DRAINING {len(self.suspect)} re-check(s) - the cold "
+                 f"cursor is paused, not stuck"
+                 if self.draining else "")
         return (f"window {self.cursor}/{total} ({pct:.1f}% of this pass), "
                 f"{self.passes_completed} pass(es) done, "
-                f"{len(self.found)} window(s) remembered")
+                f"{len(self.found)} window(s) remembered{drain}")
 
 
 # How the sweep divides its launches once it knows anything. Measured
@@ -857,6 +872,28 @@ def slower_rate_step(current: float) -> float | None:
     for rung in reversed(RATE_LADDER):
         if rung > current + 0.01:
             return rung
+    return None
+
+
+def drain_next(store: "SweepStore", windows: Sequence) -> str | None:
+    """The next queued key worth another look in this drain, or None.
+
+    None means the drain is finished, and it has two causes that must both
+    end it: the queue is empty, or everything left has already had
+    `DRAIN_MAX_TRIES` goes this pass. Only the first is "done"; the second
+    is "this is as far as re-checking gets today", and treating it as a
+    reason to keep going is how a drain becomes a deadlock - a window that
+    answers blank while unproven is re-queued by the same check that just
+    looked at it.
+
+    Keys no longer in the window list are skipped rather than returned;
+    `min_lead_days` moves the front edge forward daily, so the queue always
+    carries a few dates that have rolled out of the search entirely.
+    """
+    live = {w.key for w in windows}
+    for key in store.suspect:
+        if key in live and store.drain_tries.get(key, 0) < DRAIN_MAX_TRIES:
+            return key
     return None
 
 
@@ -1302,6 +1339,15 @@ JITTER_FRACTION = 0.25         # +/- this much on every delay
 # An eighth keeps the priority months front-loaded, which is worth
 # something, without paying for it in the frontier.
 RECHECK_EVERY = 8
+#: How many times one window may be re-checked during a single post-pass
+#: drain. The bound is the whole design: a window that answers blank while
+#: `connection_proven` is False is put straight back on the queue, so
+#: "drain until empty" is not a terminating condition - it is the deadlock
+#: this file has already documented twice ("never let forward progress
+#: depend on a signal agreeing with you"). Three tries is enough to catch a
+#: window whose blank was a passing blip, and the ones it gives up on are
+#: still queued for the ordinary one-in-eight share afterwards.
+DRAIN_MAX_TRIES = 3
 # Bound on the per-window check ledger. Older entries fall off; they
 # describe a check too old to be worth trusting anyway.
 MAX_CHECKED = 6000
@@ -1500,6 +1546,20 @@ def sweep_batch(
             store.passes_completed += 1
             store.pass_started = _now()
             log.info("Sweep completed pass %d", store.passes_completed)
+            # Every window has now been walked once, so nothing is being
+            # starved by spending the next stretch on the queue - the
+            # re-checks *are* the questions still open. Outside a pass
+            # boundary this would be the wrong trade: the one-in-eight
+            # share exists because draining flat out stalls the cold
+            # rotation, which is a blind spot swapped for a blind spot.
+            store.drain_tries = {}
+            if store.suspect:
+                store.draining = True
+                store.drain_started = _now()
+                log.info("Pass %d done - draining %d queued re-check(s) "
+                         "before starting the next one (at most %d tries "
+                         "each).", store.passes_completed, len(store.suspect),
+                         DRAIN_MAX_TRIES)
 
         # Anything queued for a second look comes first: those are windows
         # that answered empty while the sweep looked throttled, so their
@@ -1564,7 +1624,43 @@ def sweep_batch(
         hot_now = bool(hot_keys(store, threshold=hot_threshold))
         focus_turn = (pending and healthy
                       and not (freshness_turn and hot_now))
-        if focus_turn:
+
+        # The post-pass drain. Three conditions on it, each guarding a
+        # failure this project has already had:
+        #
+        #   healthy      - re-checking mid-throttle collects another false
+        #                  empty and teaches nothing;
+        #   not pending  - a focus is a stronger claim on the launches and
+        #                  already drains the same queue;
+        #   not freshness_turn - one launch in FOCUS_HOT_EVERY still goes to
+        #                  the hot list, or the cheapest known fare goes
+        #                  stale while the backfill finishes and the email
+        #                  drops the row it is built on.
+        #
+        # When it is not healthy the drain simply does not fire and the
+        # ordinary rotation runs, so forward progress never waits on a
+        # signal agreeing with us.
+        drain_key = None
+        if (store.draining and healthy and not pending
+                and not (freshness_turn and hot_now)):
+            drain_key = drain_next(store, windows)
+            if drain_key is None:
+                store.draining = False
+                log.info("Re-check drain finished; resuming the full "
+                         "rotation. %d window(s) still queued and will go "
+                         "back to the ordinary 1-in-%d share.",
+                         len(store.suspect), RECHECK_EVERY)
+
+        if drain_key is not None:
+            store.suspect.remove(drain_key)
+            store.drain_tries[drain_key] = store.drain_tries.get(drain_key, 0) + 1
+            w = next((x for x in windows if x.key == drain_key), None)
+            if w is None:                      # rolled out of the search
+                store.dropped_rechecks += 1
+                continue
+            replay = True                      # freezes the cold cursor
+            is_recheck = True
+        elif focus_turn:
             w = focus_next(pending, store)
             if w is None:
                 w = pending[0]
