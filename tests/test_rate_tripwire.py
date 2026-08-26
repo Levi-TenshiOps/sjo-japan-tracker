@@ -120,8 +120,14 @@ class TestItActuallyFires:
         monkeypatch.setattr(sweep_forever.time, "sleep", lambda *_: None)
 
         store_path = tmp_path / "store.json"
+        # --log defaults to the *production* sweep.log, and the handler is
+        # added to the root logger and never removed. Without this, calling
+        # main() here writes every later test's log output into the live
+        # file: on 2026-08-25 that put 181 fake "that is a throttle"
+        # warnings and four "the background sweep has stopped" alarms into
+        # the real log, and they were read as a real throttle.
         argv = ["sweep_forever.py", "--once", "--delay", "15",
-                "--store", str(store_path)]
+                "--store", str(store_path), "--log", ""]
         monkeypatch.setattr(sweep_forever.sys, "argv", argv)
 
         with caplog.at_level(logging.WARNING):
