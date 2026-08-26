@@ -265,3 +265,56 @@ class TestItSaysWhatItIsDoing:
         s = SweepStore()
         s.suspect = ["a", "b"]
         assert "DRAINING" not in s.progress(100)
+
+
+class TestTheFreshnessLaunchGoesToTheHotList:
+    """Spotted live on 2026-08-26: the cold cursor crept 1 -> 4 during a
+    drain that had announced it was paused.
+
+    The drain yields one launch in FOCUS_HOT_EVERY so the cheapest known
+    fare cannot age out mid-backfill. That launch was falling through to
+    `next_window`, whose interleave sometimes picks a *cold* window - so
+    the launch meant for freshness went to coverage instead, and the cursor
+    advanced while the log said it was frozen.
+
+    Identical to the bug the focus fixed on 2026-08-24, which is why the
+    fix is the same: pick the hot window directly.
+    """
+
+    def _store_with_hot(self):
+        """40 windows, not 6: a batch that laps the whole list wraps again
+        and legitimately clears `drain_tries`, so a short list tests the
+        reset rather than the drain."""
+        # 20 queued against a 12-launch batch: the queue must outlast the
+        # batch or the drain finishes and the cursor is then free to move -
+        # correct behaviour, but it tests nothing about the freeze.
+        w = windows(40)
+        s = at_end(len(w), suspect=[x.key for x in w[:20]])
+        hot = w[20]
+        s.found[hot.key] = {
+            "price_usd": 1343, "depart": hot.depart.isoformat(),
+            "ret": hot.back.isoformat(), "found_at": sweeper._now(),
+            "stops": ["ZRH"], "airlines": ["SWISS"], "total_minutes": 2780,
+            "deep_link": "x", "origin": "SJO", "destination": "TYO",
+        }
+        return w, s, hot
+
+    def test_the_cursor_does_not_creep_during_a_drain(self, dom):
+        w, s, _ = self._store_with_hot()
+        run(w, s, batch=12, fetch=Chrome(dom), hot_threshold=1400)
+        assert s.draining is True, "the drain ended early; test is not testing"
+        assert s.cursor == 0, (
+            f"cold cursor crept to {s.cursor} during a drain that froze it")
+
+    def test_the_freshness_launch_reprices_the_hot_window(self, dom):
+        """The URL encodes its dates in a base64 tfs blob, so the check is
+        on the ledger: the hot window must have been looked at."""
+        w, s, hot = self._store_with_hot()
+        run(w, s, batch=12, fetch=Chrome(dom), hot_threshold=1400)
+        assert hot.key in s.checked, "the hot window was never re-priced"
+
+    def test_the_drain_still_did_most_of_the_work(self, dom):
+        w, s, _ = self._store_with_hot()
+        run(w, s, batch=12, fetch=Chrome(dom), hot_threshold=1400)
+        assert len(s.drain_tries) >= 6, (
+            f"only {len(s.drain_tries)} launch(es) reached the queue")

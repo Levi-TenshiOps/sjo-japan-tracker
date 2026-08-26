@@ -1690,8 +1690,9 @@ def sweep_batch(
             # cold cursor, or coverage would stall on the cheap ones.
             # Spend only what freshness actually requires; the rest goes
             # on coverage. `hot_share` is the ceiling, not the setting.
-            if pending:
-                # The focus's freshness launch. Pick the hot window
+            if pending or store.draining:
+                # The focus's - or the drain's - freshness launch. Pick the
+                # hot window
                 # *directly* rather than asking `next_window` for one:
                 # with hot_share=1.0 its interleave works out to "every
                 # second launch", so on the others it falls through to the
@@ -1706,8 +1707,20 @@ def sweep_batch(
                     w = picks[(store.windows_priced // FOCUS_HOT_EVERY)
                               % len(picks)]
                     was_hot = True
-                else:
+                elif pending:
                     w, was_hot = focus_next(pending, store) or pending[0], True
+                else:
+                    # Draining with nothing hot left to refresh. Fall back to
+                    # the ordinary rotation rather than inventing a pick;
+                    # the drain only ever yields this launch when a hot
+                    # window exists, so this is the rare case where one was
+                    # pruned between the guard and here.
+                    share = needed_hot_share(
+                        len(hot), cycle_s=delay_s + LAUNCH_SECONDS,
+                        cap=hot_share)
+                    w, was_hot = next_window(windows, store,
+                                             threshold=hot_threshold,
+                                             hot_share=share)
             else:
                 share = needed_hot_share(
                     len(hot_keys(store, threshold=hot_threshold)),
