@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual trigger. Added 2026-08-26 after a GitHub Actions outage
+  # (a database failover) meant three pushes produced no run at all -
+  # not a failure, no run. Without a dispatch there is no way to test
+  # the commits it skipped except by pushing something else, and
+  # re-running the old run only re-tests the old commit.
+  workflow_dispatch:
 
 jobs:
   test:
