@@ -84,10 +84,20 @@ class TestTheWiringInCli:
     pin the placement, because putting it earlier restores the bug."""
 
     def _src(self):
+        """Only the body of `run()`.
+
+        Scoped deliberately: this started as an index over the whole file
+        and broke the moment `email_now()` was added, because that function
+        also calls `extend_observed` and `render`, sits earlier in the file,
+        and `str.index` finds the first match. The ordering claim is about
+        one function, so the text searched has to be that function.
+        """
         import re
         from pathlib import Path
-        return re.sub(r"\s+", " ",
-                      Path("tracker/cli.py").read_text(encoding="utf-8"))
+        src = Path("tracker/cli.py").read_text(encoding="utf-8")
+        start = src.index("def run(argv")
+        end = src.index("\ndef ", start + 1)
+        return re.sub(r"\s+", " ", src[start:end])
 
     def test_the_bands_are_extended_before_rendering(self):
         src = self._src()

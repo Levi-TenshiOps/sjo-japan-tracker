@@ -6,6 +6,7 @@ import argparse
 import logging
 import sys
 import time
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -333,6 +334,82 @@ def _send_alarm(content, alarm_cfg) -> None:
         log.warning("alarm failed (%s); continuing with the run", exc)
 
 
+def email_now(cfg, prefs, *, dry_run: bool = False,
+              save_preview: str | None = None) -> int:
+    """Email the best of what has already been collected. No requests.
+
+    Asked for 2026-08-26, for the workflow around a sale day: run the
+    sweep in focus mode, wait for it to finish, then see what it found.
+
+    Three deliberate choices:
+
+    * **It queries nothing.** Every price comes from `discoveries.json`
+      and the two CSVs, so it costs Google nothing, cannot be throttled,
+      never contends for `gate.google()`, and is safe to run repeatedly.
+      The sweep is the thing collecting; this only reports.
+
+    * **It does not touch `state.json`.** The two-a-day budget and the
+      reserved evening slot belong to the scheduled runs. A manual report
+      that spent a slot would silence a real alert later the same day,
+      and one that recorded a price would make the evening email think it
+      had already reported it.
+
+    * **It says it is manual.** An email that arrives outside the usual
+      two is otherwise indistinguishable from the alerting having gone
+      wrong, and this project has already sent three false alarms.
+    """
+    store = sweeper.SweepStore.load(cfg.sweep_store)
+    verified = [d.to_option() for d in
+                store.best(limit=cfg.email_rows if hasattr(cfg, "email_rows")
+                           else 12, max_age_hours=cfg.sweep_max_age_hours)]
+    if not verified:
+        log.warning("Nothing fresh enough to email: the store holds no fare "
+                    "checked within %.0f h. Is the sweep running?",
+                    cfg.sweep_max_age_hours)
+        return 1
+
+    prices = history.read_prices(cfg.history_csv, origin=cfg.origins[0],
+                                 band_source="CHROME")
+    prices += history.read_prices(cfg.sweep_history_csv, origin=cfg.origins[0],
+                                  band_source="CHROME")
+    days = history.distinct_days_across([cfg.history_csv,
+                                         cfg.sweep_history_csv],
+                                        origin=cfg.origins[0])
+    bands = pricing.resolve_bands(google_bands=None, history_prices=prices,
+                                  history_days=days)
+    bands = bands.with_observed(prices).extend_observed(
+        [o.price_usd for o in verified])
+
+    best = min(o.price_usd for o in verified)
+    content = email_render.render(
+        [], bands, threshold=prefs.good_price_usd,
+        is_great=best <= prefs.great_price_usd,
+        generated_at=(datetime.now(CR_TZ).strftime("%b %d, %Y at %H:%M")
+                      + " Costa Rica time"),
+        verified=verified,
+        priority_months=prefs.priority_months,
+        priority_share=prefs.priority_share,
+        priority_label=prefs.priority_label,
+    )
+    # Mark it, so it can never be mistaken for a scheduled alert.
+    content = replace(content, subject="[on demand] " + content.subject)
+
+    if save_preview:
+        Path(save_preview).write_text(content.html, encoding="utf-8")
+        log.info("Preview written to %s", save_preview)
+
+    log.info("On-demand email: %d option(s), cheapest $%s, from data already "
+             "on disk (no requests made).", len(verified), f"{best:,}")
+    result = notify.send_email(
+        content, to_addr=cfg.alert_email, smtp_host=cfg.smtp_host,
+        smtp_port=cfg.smtp_port, smtp_user=cfg.smtp_user,
+        smtp_password=cfg.smtp_password, from_name=cfg.from_name,
+        dry_run=dry_run,
+    )
+    log.info("Email: %s", result.detail)
+    return 0 if result.ok else 1
+
+
 def run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="track_prices",
@@ -348,6 +425,14 @@ def run(argv: list[str] | None = None) -> int:
                         help="override this run's request budget")
     parser.add_argument("--runs-per-day", type=int, default=4,
                         help="used for the throttle and coverage report")
+    parser.add_argument("--email-now", action="store_true",
+                        help="send an email right now from the data already "
+                             "on disk, without querying Google. Reads the "
+                             "sweep store and both price logs, renders the "
+                             "usual email and sends it. Does NOT touch the "
+                             "two-a-day budget or the held evening slot - "
+                             "it is a manual report, not an alert, and is "
+                             "labelled as one. Use it after a focus run.")
     parser.add_argument("--status", action="store_true",
                         help="print settings and coverage, then exit")
     parser.add_argument("--no-history", action="store_true")
@@ -376,6 +461,10 @@ def run(argv: list[str] | None = None) -> int:
     cfg.good_price_usd = prefs.good_price_usd
     cfg.great_price_usd = prefs.great_price_usd
     cfg.hub_tier = prefs.hub_tier
+
+    if args.email_now:
+        return email_now(cfg, prefs, dry_run=args.dry_run,
+                         save_preview=args.save_preview)
 
     throttle_state = throttle.ThrottleState.load(cfg.throttle_file)
     rotation = schedule.RotationState.load(cfg.rotation_file)
