@@ -197,6 +197,12 @@ class SweepStore:
     # unavailable"). Counted apart from a parse failure: there is nothing
     # to read in them, and every one seen so far transits the US anyway.
     rows_unpriced: int = 0
+    #: One-shot: has `rows_missed_by_parser` been cleared of its pre-`_NO_PRICE`
+    #: meaning? An explicit flag rather than a fingerprint, because the store
+    #: is rewritten every window - by the time anyone looks, the old value is
+    #: already sitting in a new-format file. That is the same trap that stopped
+    #: the `recent` migration firing on 2026-08-24.
+    parser_counts_migrated: bool = False
     # Rows collapsed as duplicates. Harmless for finding the cheapest
     # fare - a second option at the same price, routing, airline and
     # duration is the same deal - but it inflates the apparent gap.
@@ -269,6 +275,35 @@ class SweepStore:
             store.recent_worked.clear()
             store.throttled_since = ""
             store.consecutive_rests = 0
+
+        # `rows_missed_by_parser` changed meaning the same way. Before
+        # `_NO_PRICE` it counted every row `parse_options` did not turn into
+        # an option, which lumped Google's own "Total price is unavailable"
+        # rows in with markup this parser genuinely cannot read. Only the
+        # second kind means "fares are silently going missing", and only the
+        # second kind should raise that alarm.
+        #
+        # Measured on the live log, 2026-08-25: 40 pre-fix "unreadable" rows,
+        # in 20 windows of exactly 2 - the fingerprint of the unpriced row,
+        # which the DOM carries twice. Post-fix: 2 unpriced, **0** genuinely
+        # unmatched. So the accumulated 40 was entirely the wrong quantity,
+        # it sat above PARSER_ALARM_ROWS (25), and the next scheduled run
+        # would have emailed "results are arriving in a format we cannot
+        # read" - this project's fourth false alarm, from the very fix
+        # written to prevent it.
+        #
+        # It resets to 0 rather than to an estimate because the old value
+        # conflated two quantities and cannot be decomposed, while the
+        # post-fix count of the quantity the alarm is about was measured
+        # at zero. Zero is the honest number here, not a convenience.
+        if not store.parser_counts_migrated:
+            if store.rows_missed_by_parser:
+                log.info("Discarding %d unreadable-row count(s) recorded "
+                         "before Google's own 'no price available' rows were "
+                         "counted apart; the parser alarm judges fresh.",
+                         store.rows_missed_by_parser)
+            store.rows_missed_by_parser = 0
+            store.parser_counts_migrated = True
         return store
 
     def save(self, path: str | Path = DEFAULT_STORE) -> None:
