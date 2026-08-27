@@ -36,9 +36,9 @@ Three things look at Google, doing different jobs:
 
 | | What it does | Cost |
 |---|---|---|
-| **The sweep** | walks **every** date combination, one at a time, forever | ~900 requests/day |
+| **The sweep** | walks **every** date combination, one at a time, forever | ~4,500 requests/day |
 | **The wide net** | asks Google "cheapest fare in February?" | ~100/day |
-| **Chrome check** | re-prices the best candidates so your email is current | ~60/day |
+| **Chrome check** | re-prices the best candidates so your email is current | ~66/day |
 | **The HTTP grid** | a fast, shallow scan; a fallback if the sweep stops | ~48/day |
 
 The wide net **finds** fares fastest — it named the $1,347 record. The
@@ -131,16 +131,18 @@ all. That leaves **2,745 date combinations** — 161 departure days × up to
 Coverage is tiered, so the dates most likely to be cheap are checked far
 more often than the rest:
 
-| Tier | Revisited |
-|---|---|
-| already known to be cheap | every few hours |
-| plausible dates (by weekday pattern) | ~2 days |
-| everything else, in rotation | ~8 days |
+| Tier | Share of searches | Revisited |
+|---|---|---|
+| already known to be cheap | 8% | every ~10 hours |
+| plausible dates (by weekday pattern) | 25% | ~1.3 days |
+| everything else, in rotation | 67% | ~0.9 days |
 
-That last number is the honest limit. Walking all 2,745 windows back to
-back would take about 3 days, but only around 40% of searches go to the
-cold rotation — the rest keep the good candidates fresh, which is the
-better trade when a fare can move overnight.
+At the current rate every window is re-priced inside a day, so **a price
+drop lasting a day or more is caught essentially always, anywhere in the
+calendar**. The tiering matters less than it used to — it was designed
+when a full pass took six days — but it stays, because it is what keeps
+the cheapest known fare current between passes and it is what would carry
+the search if the rate ever had to come down again.
 
 The tiers are derived from your own data, never hardcoded, so if an
 airline changes its schedule the tracker follows within a pass. Check the
@@ -165,7 +167,7 @@ problem — half of them can be a day old.
 `--focus-max-age` makes a stale answer count as unanswered again:
 
 ```bash
-python sweep_forever.py --focus 1,2,3 --focus-max-age 6
+python sweep_forever.py --focus 1,2,3 --focus-max-age 12
 ```
 
 ## Sale day
@@ -177,9 +179,8 @@ Black Friday, a flash sale:
 # 1. stop the sweep cleanly (never kill it)
 python sweep_forever.py --stop
 
-# 2. re-price every priority-month window once, whatever its age.
-#    --delay MUST be repeated: a restart drops to the default rate.
-python sweep_forever.py --focus 1,2,3 --focus-max-age 0 --focus-max-tries 1 --delay 5
+# 2. re-price every priority-month window once, whatever its age
+python sweep_forever.py --focus 1,2,3 --focus-max-age 0 --focus-max-tries 1
 
 # 3. watch it, in another window
 python sweep_forever.py --watch
@@ -188,18 +189,16 @@ python sweep_forever.py --watch
 python -m tracker.cli --email-now
 ```
 
-**Repeat `--delay`.** A restart uses the default, not the rate you were
-running at, and that is the difference between ~6 hours and ~19. The sweep
-prints a warning when the two differ, but the flag is the fix. The rate is
-deliberately not remembered: the boot launcher passes no `--delay` so a
-reboot always comes back at the safe default.
+**No `--delay` needed** — 5s is the default, so a restart and a reboot
+both come back at it. Pass one only to go *slower*; the sweep prints a
+warning whenever the rate differs from the previous run.
 
 **Two ways to ask, and they answer different questions.** Simulated over
-the real 1,089 January–March windows at `--delay 5`:
+the real 1,089 January–March windows at the default rate:
 
 | command | finishes in | re-prices |
 |---|---|---|
-| `--focus 1,2,3 --focus-max-age 12` | **~4 h** | 590 — only what is over 12 h old |
+| `--focus 1,2,3 --focus-max-age 12` | **~4 h** | only what is over 12 h old |
 | `--focus 1,2,3 --focus-max-age 0 --focus-max-tries 1` | **~7 h** | **all 1,089, once each** |
 
 Use the first when you just want the stale half refreshed. Use the second
@@ -215,8 +214,8 @@ coverage comes first and you can email yourself part-way through.
 
 ### How long it takes
 
-**About 7 hours** to re-price all 1,089 priority-month windows at
-`--delay 5`. Where that goes:
+**About 7 hours** to re-price all 1,089 priority-month windows at the
+default 5s. Where that goes:
 
 | `--delay` | cycle | launches/h | to the focus | all 1,089 |
 |---|---|---|---|---|
@@ -271,11 +270,15 @@ python sweep_forever.py --stop       # stop it cleanly (never kill it)
 python -m tracker.cli --status       # settings and coverage
 python -m tracker.cli --dry-run      # test, send nothing
 python -m tracker.cli --email-now    # email what has been collected so far
+python -m tracker.cli --share-with list   # who else gets the fare emails
+python sweep_forever.py --coverage   # how often each date is re-checked
+python sweep_forever.py --readiness  # is it safe to change the rate?
 python -m pytest tests/ -q           # 1,584 tests, offline
 ```
 
-`--watch`, `--status`, `--coverage` and `--readiness` only read files. They
-are safe to run beside the sweep and none of them touches Google.
+`--watch`, `--status`, `--coverage`, `--readiness` and `--email-now` only
+read files. They are safe to run beside the sweep and none of them touches
+Google.
 
 **Always stop the sweep with `--stop`.** A hard kill can leave half a line
 in the CSV, and one such line once crashed every scheduled run for four
@@ -283,18 +286,18 @@ hours.
 
 ## What this route actually costs
 
-From 3,700+ browser-verified, visa-free observations:
+From 18,600+ browser-verified, visa-free observations:
 
 | | |
 |---|---|
-| Cheapest ever found | **$1,347** — Edelweiss/SWISS via Zurich, 46 h |
-| Median | **$2,478** |
-| At or under $1,400 | 3% of everything seen |
+| Cheapest ever found | **$1,336** — Edelweiss/SWISS via Zurich, 46 h |
+| Median | **$2,567** |
+| At or under $1,400 | 1.3% of everything seen |
 
 **Every fare at or under $1,600 has been Lufthansa Group** — Edelweiss,
 SWISS or Lufthansa, through Zurich, Frankfurt or Munich.
 
-So a $1,400 alert threshold catches roughly the top 3%. Do not lower it
+So a $1,400 alert threshold catches roughly the top 1%. Do not lower it
 towards $1,200 believing the route averages ~$1,350 — **that figure is the
 floor, not the average.**
 
@@ -332,6 +335,19 @@ What actually gets you blocked, in order:
 
 **Never diagnose a block by making more requests.** That turned a short
 throttle into an hour-long one. When it looks blocked, stop and wait.
+
+It also protects itself, so neither of those is left to you:
+
+- **If Google starts refusing, the sweep slows down on its own** — one
+  rung per incident, 5s → 10 → 15 → 25 → 40 → 60 → 90, and it never speeds
+  back up by itself.
+- **A restart shortly after trouble does not come back fast.** The
+  slow-down above lives in the running process, so a machine that
+  throttles at 03:00 and reboots at 06:00 would otherwise return at full
+  speed into an address still refusing — which is exactly how the one
+  serious block here happened. A fresh start within 12 hours of a throttle
+  begins at 40s and says why. Typing `--delay` yourself always wins; only
+  the default is second-guessed.
 
 ## When something breaks
 
