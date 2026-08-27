@@ -135,6 +135,50 @@ def _handle_signal(signum, frame):      # noqa: ARG001
     log.info("Stop requested; finishing the current window then saving.")
 
 
+#: How long after a throttle a fresh start still refuses to run at the fast
+#: default, and what it uses instead.
+SAFE_START_AFTER_THROTTLE_H = 12.0
+
+
+def safe_start_delay(store, wanted: float, *, asked: bool,
+                     quiet_h: float = SAFE_START_AFTER_THROTTLE_H) -> tuple:
+    """The delay to actually start at, and why.
+
+    The in-process tripwire backs the rate off when Google refuses, but it
+    dies with the process. So a machine that throttles at 03:00 and reboots
+    at 06:00 would come straight back at the fast default, into an address
+    still refusing - which is exactly the 2026-08-23 failure, where the
+    Startup launcher re-armed `--delay 6` at every boot.
+
+    An explicit `--delay` is always obeyed: someone typing it is present
+    and can watch. Only the *default* is second-guessed.
+
+    Returns (delay, reason) - reason is "" when nothing was changed.
+    """
+    if asked:
+        return wanted, ""
+    if getattr(store, "consecutive_rests", 0):
+        return max(wanted, 40.0), (
+            f"the last run was still backing off "
+            f"(consecutive_rests={store.consecutive_rests})")
+    last = getattr(store, "last_throttle", "") or ""
+    if last:
+        try:
+            age = _age_hours_iso(last)
+        except ValueError:
+            return wanted, ""
+        if age < quiet_h:
+            return max(wanted, 40.0), (
+                f"Google throttled {age:.1f} h ago and this is a fresh start, "
+                f"not something you typed")
+    return wanted, ""
+
+
+def _age_hours_iso(stamp: str) -> float:
+    return (datetime.now(timezone.utc)
+            - datetime.fromisoformat(stamp)).total_seconds() / 3600.0
+
+
 def build_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Sweep every window, forever.")
     p.add_argument("-c", "--config", default=config_mod.DEFAULT_CONFIG_PATH)
@@ -151,8 +195,20 @@ def build_args() -> argparse.Namespace:
     # into a file that runs unattended at every boot outlives every later
     # fix to the default - `--delay 6` survived in the Startup launcher
     # long after the code had been made safe, and re-armed at every reboot.
-    p.add_argument("--delay", type=float, default=40.0,
-                   help="seconds between launches (default 40, ~1,600 req/day)")
+    # Lowered 40 -> 5 on 2026-08-27, asked for so a reboot comes back at the
+    # rate actually wanted rather than resetting to a cautious one. 5s ran
+    # ~18 hours clean at ~4,600 requests/day before a restart ended it, with
+    # throttle_events unchanged at 6 throughout.
+    #
+    # This is only safe because of `safe_start_delay` below. A fast default
+    # that survives an unattended reboot is precisely the 2026-08-23 bug -
+    # there the sweep came back at --delay 6 into an address that was
+    # already refusing. The default is fast now, but a machine that comes
+    # back up shortly after a throttle does not start fast.
+    p.add_argument("--delay", type=float, default=5.0,
+                   help="seconds between launches (default 5, ~4,600 req/day; "
+                        "automatically slowed at startup if the store shows a "
+                        "recent throttle)")
     p.add_argument("--batch", type=int, default=10,
                    help="windows priced before each save (default 10)")
     p.add_argument("--once", action="store_true", help="one batch, then exit")
@@ -558,7 +614,12 @@ def main() -> int:
     # a quiet stretch would be reading a cleared health sample as an all-clear
     # - the same mistake as the recovery email that described the wrong
     # throttle.
-    current_delay = args.delay
+    current_delay, why_slower = safe_start_delay(
+        store, args.delay, asked="--delay" in sys.argv)
+    if why_slower:
+        log.warning("Starting at --delay %.0fs rather than the %.0fs default: "
+                    "%s. Pass --delay %.0f explicitly to override.",
+                    current_delay, args.delay, why_slower, args.delay)
     # `rests_total`, never `consecutive_rests`: the latter is cleared on
     # recovery and by forget_stale_health, so after one rest and one recovery
     # it returns to 0 and the next rest reads as 1 - equal to what was

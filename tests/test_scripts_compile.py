@@ -330,23 +330,49 @@ class TestTheInstallerNeverArmsTheThrottleAgain:
             if "print(" in ln:
                 assert bad not in ln, ln
 
-    def test_the_default_rate_is_a_safe_one(self):
-        """The installer relies on the default, so it must stay sane.
+    def test_an_unattended_boot_cannot_run_fast_into_a_throttle(self):
+        """What the old >= 30s floor was really protecting.
 
-        Pinned as a floor rather than an exact number, because the rate is
-        meant to be raised deliberately - 90 to 40 on 2026-08-25 - and a
-        test asserting one value would have to be edited every time, which
-        is how a guard stops being read. What must never come back is a
-        rate anywhere near the 6s that caused the day-long block.
+        This asserted the default delay was at least 30s, because "the
+        installer relies on the default" - an unattended boot uses it, and
+        the 2026-08-23 block was `--delay 6` re-armed at every reboot.
+
+        The default is 5s from 2026-08-27, asked for so a restart resumes
+        the rate actually wanted. The floor is gone; the protection is not,
+        and it is now stronger than a number: `safe_start_delay` refuses to
+        start fast when the store shows a recent throttle or an unfinished
+        back-off, so the dangerous case - a machine rebooting into an
+        address that is still refusing - cannot happen at any default.
+
+        The guard is therefore: a fast default is allowed *only* while that
+        check exists and the boot launcher still carries no rate of its own.
         """
+        from sweep_forever import safe_start_delay
+        from tracker.sweeper import SweepStore
+        from datetime import datetime, timedelta, timezone
+
         done = subprocess.run(
             [sys.executable, str(ROOT / "sweep_forever.py"), "--help"],
             capture_output=True, text=True, timeout=60, cwd=str(ROOT))
         m = re.search(r"default (\d+(?:\.\d+)?)", done.stdout)
         assert m, done.stdout
-        assert float(m.group(1)) >= 30.0, (
-            f"the default delay is {m.group(1)}s - under 30s is the "
-            f"territory that got this address blocked")
+        default = float(m.group(1))
+        if default >= 30.0:
+            return                              # safe on its own terms
+
+        just_throttled = SweepStore()
+        just_throttled.last_throttle = (
+            datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        started, why = safe_start_delay(just_throttled, default, asked=False)
+        assert started >= 30.0, (
+            f"the default is {default}s and an unattended start an hour "
+            f"after a throttle would use {started}s - this is the shape of "
+            f"the 2026-08-23 block")
+        assert why, "it slowed down without saying why"
+
+        resting = SweepStore()
+        resting.consecutive_rests = 1
+        assert safe_start_delay(resting, default, asked=False)[0] >= 30.0
 
 
 class TestTheStartupLauncherActuallyLogs:

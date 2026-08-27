@@ -48,14 +48,18 @@ class TestTheRateSurvivesTheRestart:
         reboot, and a fast rate surviving unattended is what caused the
         2026-08-23 throttle."""
         import sweep_forever
-        s = sweeper.SweepStore()
-        s.delay_s = 5.0
-        p = tmp_path / "d.json"
-        s.save(p)
         sys.argv = ["sweep_forever.py"]
-        assert sweep_forever.build_args().delay == 90.0 or \
-               sweep_forever.build_args().delay == 40.0, \
-               "the default must be a safe constant, not the last rate used"
+        first = sweep_forever.build_args().delay
+
+        # A different rate in the store must not change what the default is.
+        # The value itself is a decision in the code (5s from 2026-08-27);
+        # what this pins is that it is a *constant*, not a rate carried over
+        # from whatever the last run happened to be doing.
+        s = sweeper.SweepStore()
+        s.delay_s = 99.0
+        s.save(tmp_path / "d.json")
+        assert sweep_forever.build_args().delay == first, (
+            "the default followed the store instead of the code")
 
 
 class TestTheFocusFlagsParseTogether:
