@@ -71,6 +71,27 @@ you if the emails themselves stop. A standout fare (below
 Set `daily_digest: false` in `config.yaml` if you would rather only hear
 from it when a fare beats your budget.
 
+## Sharing with friends
+
+```bash
+python -m tracker.cli --share-with "ana@example.com, luis@example.com"
+python -m tracker.cli --share-with list     # who is on the list
+python -m tracker.cli --share-with ""       # remove everyone
+```
+
+They get **the fare emails only** — the two a day, and any `--email-now`
+report. They never receive the alarms: a throttle, a stopped sweep, or
+unreadable results are operational messages meant for whoever runs this,
+and a friend receiving one would just be alarmed by something they cannot
+act on.
+
+That separation is structural, not a rule someone has to remember —
+`alarm.send` has no way to pass extra recipients at all.
+
+Everyone is **blind copied**, so no friend sees another's address, and the
+list lives in `preferences.json`, which is gitignored: other people's
+addresses never enter the repository.
+
 ## What the email shows
 
 The **20 cheapest options, cheapest first**, with price, duration,
@@ -250,7 +271,7 @@ python sweep_forever.py --stop       # stop it cleanly (never kill it)
 python -m tracker.cli --status       # settings and coverage
 python -m tracker.cli --dry-run      # test, send nothing
 python -m tracker.cli --email-now    # email what has been collected so far
-python -m pytest tests/ -q           # 1,552 tests, offline
+python -m pytest tests/ -q           # 1,584 tests, offline
 ```
 
 `--watch`, `--status`, `--coverage` and `--readiness` only read files. They

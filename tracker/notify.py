@@ -6,6 +6,7 @@ import logging
 import smtplib
 import ssl
 import urllib.request
+from collections.abc import Sequence
 from dataclasses import dataclass
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid
@@ -45,6 +46,12 @@ def send_email(
     smtp_user: str,
     smtp_password: str,
     from_name: str = "Flight Tracker",
+    #: Extra recipients, blind-copied. Opt-in on purpose: `alarm.send` calls
+    #: this without it, so "the sweep has stopped" and "Google is throttling"
+    #: cannot reach anyone but the owner by construction, rather than by
+    #: somebody remembering. Blind rather than Cc so friends do not see each
+    #: other's addresses.
+    bcc: "Sequence[str]" = (),
     timeout: int = 30,
     dry_run: bool = False,
 ) -> DeliveryResult:
@@ -53,25 +60,28 @@ def send_email(
     if not (smtp_user and smtp_password):
         return DeliveryResult(False, "SMTP credentials missing")
 
+    extra = [a.strip() for a in bcc if a and a.strip() and a.strip() != to_addr]
     msg = build_message(
         content, to_addr=to_addr, from_addr=smtp_user, from_name=from_name
     )
     if dry_run:
-        return DeliveryResult(True, f"dry run: would email {to_addr}")
+        return DeliveryResult(
+            True, f"dry run: would email {to_addr}"
+            + (f" and bcc {len(extra)}" if extra else ""))
 
     try:
         ctx = ssl.create_default_context()
         if smtp_port == 465:
             with smtplib.SMTP_SSL(smtp_host, smtp_port, context=ctx, timeout=timeout) as s:
                 s.login(smtp_user, smtp_password)
-                s.send_message(msg)
+                s.send_message(msg, to_addrs=[to_addr] + extra)
         else:
             with smtplib.SMTP(smtp_host, smtp_port, timeout=timeout) as s:
                 s.ehlo()
                 s.starttls(context=ctx)
                 s.ehlo()
                 s.login(smtp_user, smtp_password)
-                s.send_message(msg)
+                s.send_message(msg, to_addrs=[to_addr] + extra)
     except smtplib.SMTPAuthenticationError:
         return DeliveryResult(
             False,
@@ -80,7 +90,9 @@ def send_email(
         )
     except Exception as exc:  # noqa: BLE001
         return DeliveryResult(False, f"{type(exc).__name__}: {exc}")
-    return DeliveryResult(True, f"emailed {to_addr}")
+    return DeliveryResult(
+        True, f"emailed {to_addr}"
+        + (f" (+{len(extra)} shared)" if extra else ""))
 
 
 def send_push(topic: str, *, title: str, body: str, url: str = "",

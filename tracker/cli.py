@@ -334,6 +334,44 @@ def _send_alarm(content, alarm_cfg) -> None:
         log.warning("alarm failed (%s); continuing with the run", exc)
 
 
+def set_share_with(prefs, raw: str, path: str) -> int:
+    """Set, show or clear the friends who also get the fare emails."""
+    if raw.strip().lower() in ("list", "show"):
+        if prefs.share_with:
+            log.info("Sharing the fare emails with %d address(es):",
+                     len(prefs.share_with))
+            for who in prefs.share_with:
+                log.info("   %s", who)
+        else:
+            log.info("Not shared with anyone yet. Add some with "
+                     '--share-with "ana@x.com, luis@y.com"')
+        return 0
+
+    wanted = [a.strip() for a in raw.split(",") if a.strip()]
+    bad = [a for a in wanted if "@" not in a or " " in a]
+    if bad:
+        log.error("Not an email address: %s", ", ".join(repr(b) for b in bad))
+        return 2
+    # De-duplicate, and never bcc the owner their own copy.
+    seen, clean = set(), []
+    for a in wanted:
+        if a.lower() == (prefs.alert_email or "").lower() or a.lower() in seen:
+            continue
+        seen.add(a.lower())
+        clean.append(a)
+
+    prefs.share_with = clean
+    prefs.save(path)
+    if clean:
+        log.info("The fare emails now also go to: %s", ", ".join(clean))
+        log.info("They are blind copied, so nobody sees anyone else's "
+                 "address. Alarm emails - a throttle, a stopped sweep, "
+                 "unreadable results - stay with you alone.")
+    else:
+        log.info("Sharing cleared; the fare emails go to you alone.")
+    return 0
+
+
 def email_now(cfg, prefs, *, dry_run: bool = False,
               save_preview: str | None = None) -> int:
     """Email the best of what has already been collected. No requests.
@@ -404,6 +442,7 @@ def email_now(cfg, prefs, *, dry_run: bool = False,
         content, to_addr=cfg.alert_email, smtp_host=cfg.smtp_host,
         smtp_port=cfg.smtp_port, smtp_user=cfg.smtp_user,
         smtp_password=cfg.smtp_password, from_name=cfg.from_name,
+        bcc=prefs.share_with,
         dry_run=dry_run,
     )
     log.info("Email: %s", result.detail)
@@ -425,6 +464,13 @@ def run(argv: list[str] | None = None) -> int:
                         help="override this run's request budget")
     parser.add_argument("--runs-per-day", type=int, default=4,
                         help="used for the throttle and coverage report")
+    parser.add_argument("--share-with", default=None, metavar="EMAILS",
+                        help="who else gets the fare emails, comma separated: "
+                             "--share-with \"ana@x.com, luis@y.com\". Saves to "
+                             "preferences.json and exits. Pass \"\" to clear, "
+                             "or --share-with list to show. They are blind "
+                             "copied, and they never receive the alarm emails "
+                             "- a throttle or a stopped sweep is yours.")
     parser.add_argument("--email-now", action="store_true",
                         help="send an email right now from the data already "
                              "on disk, without querying Google. Reads the "
@@ -461,6 +507,9 @@ def run(argv: list[str] | None = None) -> int:
     cfg.good_price_usd = prefs.good_price_usd
     cfg.great_price_usd = prefs.great_price_usd
     cfg.hub_tier = prefs.hub_tier
+
+    if args.share_with is not None:
+        return set_share_with(prefs, args.share_with, args.preferences)
 
     if args.email_now:
         return email_now(cfg, prefs, dry_run=args.dry_run,
@@ -959,6 +1008,7 @@ def run(argv: list[str] | None = None) -> int:
         content, to_addr=cfg.alert_email, smtp_host=cfg.smtp_host,
         smtp_port=cfg.smtp_port, smtp_user=cfg.smtp_user,
         smtp_password=cfg.smtp_password, from_name=cfg.from_name,
+        bcc=prefs.share_with,
         dry_run=args.dry_run,
     )
     log.info("Email: %s", result.detail)

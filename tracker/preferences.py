@@ -70,6 +70,16 @@ class Preferences:
     """Everything the setup wizard asks for."""
 
     alert_email: str = ""
+    #: Friends who get the fare emails too, blind-copied.
+    #:
+    #: Fare emails only. The alarms - "the sweep has stopped", "Google is
+    #: throttling", "results are unreadable" - are operational and stay
+    #: with the owner; `alarm.send` simply never passes this list.
+    #:
+    #: Lives in preferences.json, which is gitignored, because these are
+    #: other people's addresses and non-negotiable #8 keeps personal data
+    #: out of tracked files.
+    share_with: list[str] = field(default_factory=list)
 
     # Departure search window. By default this rolls forward every day:
     # anything between `min_lead_days` and `search_months` from now. Pin
@@ -159,6 +169,10 @@ class Preferences:
     def validate(self) -> None:
         if not self.alert_email or "@" not in self.alert_email:
             raise PreferencesError("alert_email is missing or invalid")
+        for who in self.share_with:
+            if "@" not in who or who.strip() != who or " " in who:
+                raise PreferencesError(
+                    f"share_with contains an invalid address: {who!r}")
         if not (MIN_SEARCH_MONTHS <= self.search_months <= MAX_SEARCH_MONTHS):
             raise PreferencesError(
                 f"search_months must be {MIN_SEARCH_MONTHS}-{MAX_SEARCH_MONTHS}"
