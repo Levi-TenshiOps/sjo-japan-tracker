@@ -40,7 +40,7 @@ import signal
 import sys
 import time
 from datetime import date as Date
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -359,6 +359,7 @@ def main() -> int:
     #: How many windows the focus set out to do, so the per-batch line can
     #: report progress against it. 0 means no focus is running.
     focus_total = 0
+    focus_started = None
     if args.focus is not None:
         if args.focus.strip().lower() in ("none", "off", ""):
             focus_months = []
@@ -636,6 +637,7 @@ def main() -> int:
                 what = (f"answered more than {args.focus_max_age:g} h ago, "
                         f"at most {tries}x each")
             focus_total = len(pend)
+            focus_started = datetime.now(timezone.utc)
             log.info("FOCUS: finishing %s before the rest - %d window(s) %s. "
                      "The cold rotation is paused at %d and resumes after.",
                      names, len(pend), what, store.cursor)
@@ -810,6 +812,26 @@ def main() -> int:
                 done_n = max(focus_total - left, 0)
                 focus_note = (f"  |  FOCUS {done_n}/{focus_total} re-priced, "
                               f"{left} to go ({100.0 * done_n / focus_total:.0f}%)")
+                # An ETA from the rate actually observed, not from the
+                # configured delay: the real pace depends on how many
+                # windows come back blank (~4s) versus with fares (~14s),
+                # and on time lost waiting behind the scheduled runs.
+                # Below a handful of windows the rate is noise, so say so
+                # rather than print a wrong finish time.
+                if focus_started is not None:
+                    mins = (datetime.now(timezone.utc)
+                            - focus_started).total_seconds() / 60.0
+                    if done_n >= 5 and mins > 0:
+                        per_min = done_n / mins
+                        eta_min = left / per_min if per_min else 0
+                        ends = (datetime.now(timezone.utc)
+                                + timedelta(minutes=eta_min)).astimezone()
+                        left_txt = (f"~{eta_min:.0f} min left"
+                                    if eta_min < 90 else
+                                    f"~{eta_min / 60:.1f} h left")
+                        focus_note += f", {left_txt}, done about {ends:%a %H:%M}"
+                    else:
+                        focus_note += ", measuring the rate..."
         log.info("%s%s%s%s", store.progress(len(windows)),
                  f", {dropped} pruned" if dropped else "",
                  f", cheapest under threshold ${under[0].price_usd:,}" if under else "",

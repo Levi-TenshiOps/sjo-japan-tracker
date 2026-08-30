@@ -246,3 +246,39 @@ class TestTheTerminalShowsFocusProgress:
     def test_it_stops_reporting_once_the_focus_is_done(self):
         src = self._src()
         assert "if focus_months and not store.focus_done_logged:" in src
+
+
+class TestTheLogSaysWhenItWillFinish:
+    """Asked for 2026-08-30: the terminal should say how long is left, not
+    only how far it has got. --watch had an ETA; the plain log did not, and
+    the log is what people leave open."""
+
+    def _src(self):
+        import re
+        from pathlib import Path
+        return re.sub(r"\s+", " ",
+                      Path("sweep_forever.py").read_text(encoding="utf-8"))
+
+    def test_it_reports_an_eta(self):
+        src = self._src()
+        assert "done about" in src
+        assert "left_txt" in src
+
+    def test_the_rate_is_measured_not_assumed(self):
+        """The configured delay is not the real pace: a blank page comes
+        back in ~4s and one with fares in ~14s, and the sweep also waits
+        behind the scheduled runs."""
+        src = self._src()
+        assert "focus_started" in src
+        assert "per_min = done_n / mins" in src
+
+    def test_it_refuses_to_guess_from_too_few_windows(self):
+        src = self._src()
+        assert "done_n >= 5" in src
+        assert "measuring the rate..." in src
+
+    def test_minutes_below_an_hour_and_a_half(self):
+        """"~0.0 h left" is not an answer."""
+        src = self._src()
+        assert "eta_min < 90" in src
+        assert "min left" in src
