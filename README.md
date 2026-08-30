@@ -1,13 +1,53 @@
 # SJO → Japan flight tracker
 
-Finds cheap round trips from **San José, Costa Rica to Tokyo**, and emails
-them to you twice a day.
+A standing search for cheap round trips from **San José, Costa Rica to
+Tokyo** — one that keeps running, prices **every** date combination worth
+considering, and emails you the cheapest bookable fare twice a day.
 
-The catch it exists to solve: **about three quarters of what Google offers
-on this route connects through the United States**, which a Costa Rican
-passport cannot transit without a consular C-1 visa. Searching by hand is
-therefore actively misleading — most of what you see, you cannot book.
-This filters all of it out, along with Canada, mainland China and Russia.
+## Why not just use Google Flights
+
+Google Flights answers "what does this trip cost?" You have to know the
+trip. This answers a different question: **"across every departure day and
+every trip length I would accept, over six months, what is the cheapest
+fare I can actually board — today?"**
+
+Four things make that hard by hand:
+
+**1. The trip is a shape, not a date.** I want 21 to 38 nights, leaving any
+day, in six named months. That is **2,745 departure/return combinations**.
+Google Flights prices one at a time, and its flexible-date views cover a
+couple of months and a fixed trip length — not "any length between three
+and five and a half weeks". Checking 2,745 by hand is not a thing anyone
+does; this checks all of them, and starts again about once a day.
+
+**2. Three quarters of what Google shows me, I cannot board.** Most cheap
+routings from San José connect through the United States, and a Costa
+Rican passport needs a consular C-1 visa even for a 60-minute airside
+connection. Google Flights has no filter for this — there is no "exclude
+routings through countries I cannot transit". So the cheapest result on
+screen is usually a mirage, and you only find out at the gate. Every
+routing here is checked leg by leg, and US, Canadian, mainland Chinese and
+Russian transits are removed before a fare is ever shown to me.
+
+**3. The cheapest fares are invisible to a normal scrape.** The
+Lufthansa-group routings through Zurich, where every fare under $1,600 on
+this route has been found, do not appear in the page Google serves without
+JavaScript. On one window a plain fetch reported $1,635 where the real
+answer was **$1,347**. So this drives a real browser for every check.
+
+**4. A price means nothing without a baseline.** Google Flights will tell
+you a fare is "low" against its own history for that one search. This has
+priced close to 50,000 real, visa-free fares on this exact route, so an
+email does not just say "$1,481" — it can say where that sits. The
+cheapest ever seen is **$1,335**; the median is about **$2,500**. A fare
+under $1,400 is roughly the best 1% of everything this has ever seen.
+
+On top of that it takes **priority months** — the ones I actually want to
+travel in — and re-checks those far more often than the rest, and it can
+be pointed at them on demand for a sale day.
+
+Google Flights can track a price for a *route you have already chosen*.
+This finds the route.
 
 ## What this is, and what it is not
 
