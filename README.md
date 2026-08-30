@@ -314,7 +314,7 @@ Setup is the four lines at the top of this file. Everything else:
 python sweep_forever.py                 # start it; leave it running
 python sweep_forever.py --stop          # stop cleanly, waits until it has
 python sweep_forever.py --watch         # live progress, refreshing
-python sweep_forever.py --status        # what it has found, then exit
+python sweep_forever.py --status        # findings, and a focus ETA if one is running
 python sweep_forever.py --coverage      # how often each date is re-checked
 python sweep_forever.py --readiness     # is it safe to change the rate?
 python sweep_forever.py --once          # a single batch, then exit

@@ -55,7 +55,8 @@ from tracker.sweeper import (                     # noqa: E402
     DEFAULT_STORE, FOCUS_MAX_TRIES, LAUNCH_SECONDS, RECHECK_EVERY,
     Discovery, SweepStore,
     coverage_report,
-    focus_pending, queue_unverified, readiness_report, slower_rate_step,
+    focus_eta, focus_pending, queue_unverified, readiness_report,
+    slower_rate_step,
     sweep_batch,
     sweep_order,
     unverified_windows, watch_lines,
@@ -497,6 +498,20 @@ def main() -> int:
     if args.status:
         print(store.progress(len(windows)))
         print(store.health())
+        # A running focus freezes the cold cursor, so the line above says
+        # nothing about the work being done. Read the settings from the
+        # store, or from the flags if given - the same fallback --watch uses.
+        s_months = (focus_months if args.focus is not None
+                    else (list(store.focus_months) or focus_months))
+        s_age = (args.focus_max_age if args.focus_max_age is not None
+                 else store.focus_max_age_hours)
+        s_tries = (args.focus_max_tries or store.focus_max_tries
+                   or FOCUS_MAX_TRIES)
+        if s_months:
+            print()
+            for line in focus_eta(windows, store, s_months,
+                                  max_age_hours=s_age, max_tries=s_tries):
+                print(line)
         # What the hand-kept allow list is costing. These are fares that
         # were refused *only* because a hub has never been researched -
         # not US or Canada, which are refused for ever. Costa Rica has

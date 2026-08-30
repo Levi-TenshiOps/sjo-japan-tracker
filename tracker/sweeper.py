@@ -940,6 +940,62 @@ def drain_next(store: "SweepStore", windows: Sequence) -> str | None:
     return None
 
 
+def focus_eta(windows: Sequence, store: "SweepStore", months: Sequence[int],
+              *, max_age_hours: float | None, max_tries: int,
+              sample_minutes: float = 60.0,
+              now: datetime | None = None) -> list[str]:
+    """How far a focus has got and when it will finish.
+
+    The rate is measured from the check ledger rather than from a start
+    time, so this works on a focus that was already running before anyone
+    thought to ask - and on one whose pace has changed, which it does: a
+    blank page comes back in ~4s and one with fares in ~14s, and the sweep
+    waits behind the six scheduled runs.
+
+    Only windows in the focus months count towards the rate. Counting
+    every check would include the one-in-five freshness launches that go
+    to the hot list, and overstate progress by a fifth.
+    """
+    now = now or datetime.now(timezone.utc)
+    if not months:
+        return []
+    in_focus = {w.key for w in windows if w.depart.month in set(months)}
+    left = len(focus_pending(windows, store, months,
+                             max_age_hours=max_age_hours,
+                             max_tries=max_tries, now=now))
+    total = len(in_focus)
+    done = max(total - left, 0)
+    out = [f"  FOCUS {', '.join(_MONTH_LABEL.get(m, str(m)) for m in months)}: "
+           f"{done:,} of {total:,} re-priced, {left:,} to go "
+           f"({100.0 * done / total if total else 0:.0f}%)"]
+    if not left:
+        out.append("  finished")
+        return out
+
+    cutoff = now - timedelta(minutes=sample_minutes)
+    recent = 0
+    for key in in_focus:
+        at = _checked_rec(store, key).get("at") or ""
+        if not at:
+            continue
+        try:
+            if datetime.fromisoformat(at) >= cutoff:
+                recent += 1
+        except ValueError:
+            continue
+    if recent < 5:
+        out.append(f"  (only {recent} focus window(s) priced in the last "
+                   f"{sample_minutes:.0f} min - too few to estimate)")
+        return out
+    per_hour = recent * 60.0 / sample_minutes
+    eta_h = left / per_hour
+    ends = (now + timedelta(hours=eta_h)).astimezone()
+    out.append(f"  {per_hour:.0f} windows/hour over the last "
+               f"{sample_minutes:.0f} min   ~{eta_h:.1f} h left   "
+               f"finishes about {ends:%a %H:%M}")
+    return out
+
+
 def readiness_report(store: "SweepStore", *, throttle_state, hours_since_email,
                      quiet_hours: float = READY_QUIET_HOURS,
                      delay_s: float | None = None,

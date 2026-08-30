@@ -282,3 +282,87 @@ class TestTheLogSaysWhenItWillFinish:
         src = self._src()
         assert "eta_min < 90" in src
         assert "min left" in src
+
+
+class TestStatusShowsTheFocusEta:
+    """Asked mid-focus 2026-08-30: how many hours left?
+
+    The log line only gained an ETA in a later commit, and a running sweep
+    cannot pick that up - restarting to get it would clear `focus_tries`
+    and re-do everything already priced. `--status` is a fresh process
+    every time, so it answers without touching the run.
+
+    The rate is measured from the check ledger rather than a start time,
+    so it works on a focus already in flight and follows a pace that
+    changes: blank pages come back in ~4s, pages with fares in ~14s.
+    """
+
+    def _windows(self, n=20, month=1):
+        from datetime import date, timedelta
+        from tracker.schedule import Window
+        base = date(2027, month, 1)
+        return [Window(base + timedelta(days=i), base + timedelta(days=i + 27))
+                for i in range(n)]
+
+    def _store(self, w, done, minutes_ago=10):
+        from datetime import datetime, timezone, timedelta
+        from tracker.sweeper import SweepStore
+        s = SweepStore()
+        recent = (datetime.now(timezone.utc)
+                  - timedelta(minutes=minutes_ago)).isoformat()
+        old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+        for i, x in enumerate(w):
+            s.checked[x.key] = {"at": recent if i < done else old,
+                                "empty": True, "blank": True, "healthy": True}
+            if i < done:
+                s.focus_tries[x.key] = 1
+        return s
+
+    def test_it_reports_progress(self):
+        w = self._windows()
+        lines = sweeper.focus_eta(w, self._store(w, 8), [1],
+                                  max_age_hours=0, max_tries=1)
+        assert "8 of 20 re-priced" in " ".join(lines)
+
+    def test_it_estimates_the_time_left(self):
+        w = self._windows()
+        text = " ".join(sweeper.focus_eta(w, self._store(w, 8), [1],
+                                          max_age_hours=0, max_tries=1))
+        assert "h left" in text and "finishes about" in text
+
+    def test_too_few_samples_refuses_to_guess(self):
+        w = self._windows()
+        text = " ".join(sweeper.focus_eta(w, self._store(w, 2), [1],
+                                          max_age_hours=0, max_tries=1))
+        assert "too few to estimate" in text
+        assert "h left" not in text
+
+    def test_a_finished_focus_says_finished(self):
+        w = self._windows()
+        s = self._store(w, len(w))
+        for x in w:
+            s.focus_tries[x.key] = 1
+        text = " ".join(sweeper.focus_eta(w, s, [1],
+                                          max_age_hours=0, max_tries=1))
+        assert "finished" in text
+
+    def test_no_focus_means_no_output(self):
+        w = self._windows()
+        assert sweeper.focus_eta(w, self._store(w, 5), [],
+                                 max_age_hours=0, max_tries=1) == []
+
+    def test_only_focus_months_count_towards_the_rate(self):
+        """Counting every check would include the one-in-five freshness
+        launches to the hot list and overstate the pace by a fifth."""
+        import re
+        from pathlib import Path
+        src = re.sub(r"\s+", " ",
+                     Path("tracker/sweeper.py").read_text(encoding="utf-8"))
+        assert "for key in in_focus:" in src
+
+    def test_status_prints_it(self):
+        import re
+        from pathlib import Path
+        src = re.sub(r"\s+", " ",
+                     Path("sweep_forever.py").read_text(encoding="utf-8"))
+        assert "for line in focus_eta(windows, store, s_months," in src
