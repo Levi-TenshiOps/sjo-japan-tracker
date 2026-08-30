@@ -9,6 +9,27 @@ passport cannot transit without a consular C-1 visa. Searching by hand is
 therefore actively misleading — most of what you see, you cannot book.
 This filters all of it out, along with Canada, mainland China and Russia.
 
+## What this is, and what it is not
+
+I built this quickly, with AI assistance, to solve one problem: find me a
+cheap flight to Japan that I can actually board. That is the whole goal.
+
+It is **not** a learning exercise, not a portfolio piece, and not a
+demonstration of anything. It is a personal tool that happens to be
+public, in case it is useful to someone in the same position.
+
+**I have not read the Python line by line.** What I did instead was insist
+on the part I can judge: that it is tested hard, that the tests found real
+bugs rather than confirming what was already believed, and that the thing
+actually works. It does — it has run continuously for a week, priced
+close to 50,000 real fares, and the emails arrive twice a day with prices
+I can go and book.
+
+So: judge it by whether it works, because that is the standard it was held
+to. If you want to run it, read the **Honest caveats** at the bottom first
+— particularly that the visa rules are specific to a Costa Rican passport,
+and that scraping Google is against their terms of service.
+
 **You need:** Python 3.10+, **Google Chrome installed** (the only thing
 that sees the cheap fares), and a Gmail **app password** — not your normal
 password, which Google blocks.
