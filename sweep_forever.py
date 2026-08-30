@@ -356,6 +356,9 @@ def main() -> int:
 
     # --focus overrides the config for this run; "none" turns it off.
     focus_months = list(cfg.sweep_focus_months or [])
+    #: How many windows the focus set out to do, so the per-batch line can
+    #: report progress against it. 0 means no focus is running.
+    focus_total = 0
     if args.focus is not None:
         if args.focus.strip().lower() in ("none", "off", ""):
             focus_months = []
@@ -626,6 +629,7 @@ def main() -> int:
             else:
                 what = (f"answered more than {args.focus_max_age:g} h ago, "
                         f"at most {tries}x each")
+            focus_total = len(pend)
             log.info("FOCUS: finishing %s before the rest - %d window(s) %s. "
                      "The cold rotation is paused at %d and resumes after.",
                      names, len(pend), what, store.cursor)
@@ -781,9 +785,24 @@ def main() -> int:
         under = store.best(limit=3, threshold=prefs.good_price_usd)
         if store.suspect or store.throttled_since:
             log.info("Health: %s", store.health())
-        log.info("%s%s%s", store.progress(len(windows)),
+        # The cold cursor is frozen during a focus, so the line above it
+        # repeats an unchanging "window 1360/2745" - which reads as a
+        # stalled sweep. `--watch` has shown the focus properly since
+        # 2026-08-24; the log people actually leave open did not.
+        focus_note = ""
+        if focus_months and not store.focus_done_logged:
+            left = len(focus_pending(
+                windows, store, focus_months,
+                max_age_hours=args.focus_max_age,
+                max_tries=(args.focus_max_tries or FOCUS_MAX_TRIES)))
+            if focus_total:
+                done_n = max(focus_total - left, 0)
+                focus_note = (f"  |  FOCUS {done_n}/{focus_total} re-priced, "
+                              f"{left} to go ({100.0 * done_n / focus_total:.0f}%)")
+        log.info("%s%s%s%s", store.progress(len(windows)),
                  f", {dropped} pruned" if dropped else "",
-                 f", cheapest under threshold ${under[0].price_usd:,}" if under else "")
+                 f", cheapest under threshold ${under[0].price_usd:,}" if under else "",
+                 focus_note)
 
         if args.once or wants_stop():
             clear_stop()

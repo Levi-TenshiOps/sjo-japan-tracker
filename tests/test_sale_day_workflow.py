@@ -218,3 +218,31 @@ class TestEveryFocusFlagReachesSweepBatch:
                 continue
             assert f"args.{name}" in call, (
                 f"--{name.replace('_', '-')} never reaches sweep_batch")
+
+
+class TestTheTerminalShowsFocusProgress:
+    """The per-batch line is what a person leaves open, and during a focus
+    the cold cursor is frozen - so it repeated an unchanging "window
+    1360/2745" and read as a stalled sweep. `--watch` has shown the focus
+    properly since 2026-08-24; the ordinary log did not, and that is the
+    one people actually watch. Asked about 2026-08-30, mid-focus."""
+
+    def _src(self):
+        import re
+        from pathlib import Path
+        return re.sub(r"\s+", " ",
+                      Path("sweep_forever.py").read_text(encoding="utf-8"))
+
+    def test_the_batch_line_reports_the_focus(self):
+        src = self._src()
+        assert "FOCUS {done_n}/{focus_total} re-priced" in src
+
+    def test_it_counts_against_the_size_at_startup(self):
+        """A percentage needs a denominator that does not move."""
+        src = self._src()
+        assert "focus_total = len(pend)" in src
+        assert "focus_total = 0" in src, "no default for runs without a focus"
+
+    def test_it_stops_reporting_once_the_focus_is_done(self):
+        src = self._src()
+        assert "if focus_months and not store.focus_done_logged:" in src
