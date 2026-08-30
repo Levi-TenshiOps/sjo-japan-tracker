@@ -129,6 +129,65 @@ def release_instance(path: str = INSTANCE_LOCK) -> None:
         pass
 
 
+#: How long `--stop` waits before giving up and saying so. A window takes
+#: ~20s, but the sweep can also be queued behind a scheduled run's whole
+#: Chrome phase, which is about four minutes.
+STOP_TIMEOUT_S = 420.0
+
+
+def stop_and_wait(store_path: str = DEFAULT_STORE, *,
+                  timeout_s: float = STOP_TIMEOUT_S,
+                  poll_s: float = 2.0,
+                  sleep=time.sleep,
+                  running=another_sweeper_running) -> int:
+    """Ask the sweep to stop, then wait until it actually has.
+
+    It used to write the flag and return immediately, which reads as
+    success and is not: the sweep finishes its current window first, and
+    can be queued behind a scheduled run's Chrome phase for four minutes.
+    Anyone following the sale-day steps then starts the next command into
+    a still-running sweep and gets "Another sweeper is already running".
+
+    Running it with nothing running was worse - it printed the same
+    hopeful message and left a `sweep.stop` file behind. Harmless, because
+    startup clears it, but it told you a sweep had been asked to stop when
+    there was none.
+
+    Exit 0 when stopped, 1 on timeout - so a script can rely on it.
+    """
+    other = running()
+    if other is None:
+        clear_stop()            # never leave a flag that means nothing
+        print("Nothing to stop: no sweep is running.")
+        return 0
+
+    request_stop()
+    print(f"Stopping the sweep (pid {other}). It finishes the current "
+          f"window, saves, and releases the Google lock first.")
+    waited = 0.0
+    while waited < timeout_s:
+        sleep(poll_s)
+        waited += poll_s
+        if running() is None:
+            clear_stop()
+            where = ""
+            try:
+                st = SweepStore.load(store_path)
+                where = f" The cursor is at {st.cursor:,}; it resumes there."
+            except Exception:                       # noqa: BLE001
+                pass
+            print(f"Stopped after {waited:.0f}s. Safe to start a new "
+                  f"one.{where}")
+            return 0
+        if waited % 30 < poll_s:
+            print(f"   still finishing... ({waited:.0f}s)", flush=True)
+
+    print(f"Still running after {timeout_s:.0f}s (pid {other}). It may be "
+          f"waiting on the Google lock behind a scheduled run. The stop "
+          f"request stands - re-run --stop to keep waiting.")
+    return 1
+
+
 def _handle_signal(signum, frame):      # noqa: ARG001
     global _stop
     _stop = True
@@ -216,6 +275,10 @@ def build_args() -> argparse.Namespace:
                    help="ask a running sweep to finish its window and exit "
                         "cleanly, then exit. Better than killing it: a killed "
                         "sweep leaves the Google lock behind.")
+    p.add_argument("--stop-timeout", type=float, default=STOP_TIMEOUT_S,
+                   metavar="SECONDS",
+                   help=f"how long --stop waits for the sweep to actually "
+                        f"exit (default {STOP_TIMEOUT_S:.0f})")
     p.add_argument("--recheck-unverified", action="store_true",
                    help="queue every walked window that produced no fare and "
                         "was not checked on a healthy connection, then exit")
@@ -354,12 +417,7 @@ def main() -> int:
         return 0
 
     if args.stop:
-        request_stop()
-        print("Stop requested. The running sweep will finish its current "
-              "window, save, release the Google lock and exit - usually "
-              "within a couple of minutes.")
-        print("It is safe to start a new one after that; the cursor resumes.")
-        return 0
+        return stop_and_wait(args.store, timeout_s=args.stop_timeout)
 
     if args.watch is not None:
         every = max(float(args.watch), 5.0)

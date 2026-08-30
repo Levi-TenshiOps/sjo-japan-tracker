@@ -176,7 +176,8 @@ The whole sequence, for a day when fares are expected to move — Labor Day,
 Black Friday, a flash sale:
 
 ```bash
-# 1. stop the sweep cleanly (never kill it)
+# 1. stop the sweep cleanly (never kill it). This waits until it has
+#    really exited, so you can run the next line the moment it returns.
 python sweep_forever.py --stop
 
 # 2. re-price every priority-month window once, whatever its age
@@ -266,7 +267,7 @@ stopped.
 ```bash
 python sweep_forever.py --watch      # live progress, leave it open
 python sweep_forever.py --status     # what has it found?
-python sweep_forever.py --stop       # stop it cleanly (never kill it)
+python sweep_forever.py --stop       # stop cleanly and wait for it to exit
 python -m tracker.cli --status       # settings and coverage
 python -m tracker.cli --dry-run      # test, send nothing
 python -m tracker.cli --email-now    # email what has been collected so far
