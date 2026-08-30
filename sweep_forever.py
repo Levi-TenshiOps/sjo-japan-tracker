@@ -93,7 +93,7 @@ def clear_stop(path: str = STOP_FILE) -> None:
     try:
         Path(path).unlink(missing_ok=True)
     except OSError:
-        pass
+        pass            # a stop file we cannot delete is not worth dying over
 
 
 # One sweeper at a time. `gate.py` stops two processes querying Google
@@ -127,7 +127,7 @@ def release_instance(path: str = INSTANCE_LOCK) -> None:
         if p.exists() and p.read_text(encoding="utf-8").strip() == str(os.getpid()):
             p.unlink()
     except OSError:
-        pass
+        pass            # a stale pid file is broken by the next start anyway
 
 
 #: How long `--stop` waits before giving up and saying so. A window takes
