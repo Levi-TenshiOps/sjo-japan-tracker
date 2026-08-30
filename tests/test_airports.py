@@ -142,3 +142,33 @@ class TestUnknownAirportsFailClosed:
                           deep_link="")
         assert not o.visa_ok
         assert "ANC" in o.banned_reason
+
+
+class TestItFailsClosedOnAnythingAtAll:
+    """The visa check must reject, never raise.
+
+    Added before publishing, 2026-08-30. `ban_reason(None)` raised
+    AttributeError. Both production callers happen to guard their input -
+    but they guard it by raising too: browser.banned_reason runs a regex
+    that throws on None, and itinerary.validate passes whatever the parser
+    produced.
+
+    An exception in the visa check is not a rejection. It is an unhandled
+    error whose outcome depends on which caller catches it, and this is the
+    one function in the project that must never depend on that. The cost of
+    being wrong here is a traveller turned away at the gate.
+    """
+
+    @pytest.mark.parametrize("junk", [None, "", "   ", 0, 123, [], {}, object()])
+    def test_junk_is_refused_not_raised(self, junk):
+        assert ban_reason(junk) is not None, f"{junk!r} came back allowed"
+
+    def test_whitespace_around_a_real_code_still_bans_it(self):
+        """'LAX ' must be the United States, not merely unresearched."""
+        assert "C-1" in ban_reason(" LAX ")
+
+    def test_lowercase_is_handled(self):
+        assert "C-1" in ban_reason("lax")
+
+    def test_a_real_hub_still_passes_with_whitespace(self):
+        assert ban_reason(" ZRH ") is None

@@ -216,7 +216,16 @@ def ban_reason(code: str) -> str | None:
     HUBS, exactly as the eight-year-old comment at the top of this file
     already asked for.
     """
-    code = code.upper()
+    # Fail closed on anything that is not a usable code, including None.
+    # Both callers guard their inputs today, but they guard them by raising:
+    # `browser.banned_reason` runs a regex that throws on None, and
+    # `itinerary.validate` passes whatever the parser produced. An exception
+    # in the visa check is not a rejection - it is an unhandled error whose
+    # outcome depends on who catches it, and this is the one function in the
+    # project that must never depend on that.
+    if not isinstance(code, str) or not code.strip():
+        return UNRESEARCHED_REASON
+    code = code.strip().upper()
     for group, reason in BAN_REASONS.items():
         if code in group:
             return reason
