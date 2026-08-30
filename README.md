@@ -4,41 +4,23 @@ A standing search for cheap round trips from **San José, Costa Rica to
 Tokyo**. It prices every date combination worth considering, around the
 clock, and emails you the cheapest bookable fare twice a day.
 
-## Why not just use Google Flights
+## Why not Google Flights
 
-Google Flights answers *"what does this trip cost?"* — you have to know the
-trip. This answers **"across every departure day and trip length I'd
-accept, over six months, what's the cheapest fare I can actually board
-today?"**
+Google Flights prices a trip you have already chosen. This finds the trip.
 
 | | Google Flights | This |
 |---|---|---|
-| **Trip shape** | one date pair at a time; flexible views assume a fixed length | any length 21–38 nights, any departure day, **2,745 combinations**, all re-priced daily |
-| **Visa filter** | none — no way to exclude countries you can't transit | every routing checked leg by leg; US, Canada, China, Russia removed |
-| **Cheap routings** | hidden without JavaScript | drives a real browser — found **$1,347** where a plain scrape said $1,635 |
-| **Is $1,500 a good price?** | says "low" or "typical", but only for the dates you happened to search | knows the whole route from ~50,000 real fares: best ever **$1,335**, typical **~$2,500** — so $1,500 is near the floor |
-| **Updates** | you check, or track one chosen route | two emails a day, automatically |
+| **Dates** | one pair at a time | all **2,745** combinations, 21–38 nights, re-priced daily |
+| **Visa** | no such filter | US, Canada, China and Russia routings removed, leg by leg |
+| **Cheap fares** | hidden without JavaScript | a real browser: found **$1,347** where a plain scrape said $1,635 |
+| **Is $1,500 good?** | "low" — for the dates you happened to search | only **2%** of 49,000 fares seen here have been cheaper |
+| **Updates** | you check | two emails a day |
 
-The visa point is the sharpest. About **three quarters of what Google shows
-for this route connects through the United States**, and a Costa Rican
-passport needs a consular C-1 visa even for a 60-minute airside connection.
-So most of what you see, you cannot book — and you find out at the gate.
-
-The last row is subtler but matters just as much. Google Flights *does*
-label a fare low or typical — but against its own history for **the search
-you just did**, one route on one pair of dates. Change the dates and it
-starts over. It cannot tell you whether $1,500 is good *for this route in
-general*, because it was never watching the other 2,744 date combinations.
-This one was, so it can say exactly where a price sits: the cheapest fare
-ever seen here is $1,335 and the middle of the market is around $2,500.
-That is the difference between "this looks low" and "only 2% of the 49,000
-fares seen on this route have ever been cheaper than $1,500".
-
-You can also name **priority months**, which get re-checked far more often
-and can be targeted on demand before a sale day.
-
-> Google Flights tracks a price for a route you've already chosen.
-> This finds the route.
+The visa row is the one that hurts. **Three quarters of what Google shows
+for this route connects through the United States**, which a Costa Rican
+passport cannot transit without a consular visa — even for a 60-minute
+airside connection. So most of what you see, you cannot book, and you find
+out at the gate.
 
 ## What this is, and what it is not
 
@@ -174,9 +156,13 @@ Trip lengths  21–38 nights
 Lead time     ignore departures within 21 days
 ```
 
-**The whole trip must fall inside those months**, not just its first day —
-a 31 March departure comes home in late April, so it isn't searched. That
-leaves **2,745 combinations** (161 departure days × up to 18 lengths).
+**Priority months** are the ones you actually want to travel in. They are
+swept first, kept fresher than the rest, and can be targeted on demand
+before a sale day.
+
+**The whole trip must fall inside the searched months**, not just its first
+day — a 31 March departure comes home in late April, so it isn't searched.
+That leaves **2,745 combinations** (161 departure days × up to 18 lengths).
 
 Coverage is tiered, derived from your own data rather than hardcoded:
 
