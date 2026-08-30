@@ -215,7 +215,15 @@ class TestTheSweepCanBeStoppedCleanly:
         import sweep_forever as sf
         sf.clear_stop(str(tmp_path / "never-existed.stop"))
 
-    def test_the_stop_command_writes_the_file_and_exits(self, tmp_path):
+    def test_the_stop_command_reports_honestly(self, tmp_path):
+        """It used to write the flag and return "Stop requested" whatever
+        the truth was - including when nothing was running, which left a
+        stop file behind for a sweep that did not exist.
+
+        It waits for the real exit now, so with nothing running the honest
+        answer is "Nothing to stop" and no file. See
+        tests/test_stop_actually_waits.py for the waiting itself.
+        """
         import json
         prefs = json.loads((ROOT / "preferences.example.json").read_text(
             encoding="utf-8"))
@@ -223,14 +231,18 @@ class TestTheSweepCanBeStoppedCleanly:
         p.write_text(json.dumps(prefs), encoding="utf-8")
         stop_file = ROOT / "sweep.stop"
         existed = stop_file.exists()
+        pid_file = ROOT / "sweep.pid"
+        if pid_file.exists():
+            pytest.skip("a sweep is running here; this asserts the idle case")
         try:
             done = subprocess.run(
                 [sys.executable, str(ROOT / "sweep_forever.py"), "--stop",
                  "--preferences", str(p), "--log", ""],
                 capture_output=True, text=True, timeout=60, cwd=str(ROOT))
             assert done.returncode == 0, done.stderr
-            assert "Stop requested" in done.stdout
-            assert stop_file.exists()
+            assert "Nothing to stop" in done.stdout, done.stdout
+            assert not stop_file.exists(), (
+                "it left a stop flag for a sweep that was not running")
         finally:
             if not existed:
                 stop_file.unlink(missing_ok=True)
