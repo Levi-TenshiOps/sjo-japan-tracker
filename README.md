@@ -16,13 +16,23 @@ today?"**
 | **Trip shape** | one date pair at a time; flexible views assume a fixed length | any length 21–38 nights, any departure day, **2,745 combinations**, all re-priced daily |
 | **Visa filter** | none — no way to exclude countries you can't transit | every routing checked leg by leg; US, Canada, China, Russia removed |
 | **Cheap routings** | hidden without JavaScript | drives a real browser — found **$1,347** where a plain scrape said $1,635 |
-| **Is this a good price?** | "low" vs its own history for that one search | ~50,000 real fares on this exact route: cheapest **$1,335**, median **~$2,500** |
+| **Is $1,500 a good price?** | says "low" or "typical", but only for the dates you happened to search | knows the whole route from ~50,000 real fares: best ever **$1,335**, typical **~$2,500** — so $1,500 is near the floor |
 | **Updates** | you check, or track one chosen route | two emails a day, automatically |
 
 The visa point is the sharpest. About **three quarters of what Google shows
 for this route connects through the United States**, and a Costa Rican
 passport needs a consular C-1 visa even for a 60-minute airside connection.
 So most of what you see, you cannot book — and you find out at the gate.
+
+The last row is subtler but matters just as much. Google Flights *does*
+label a fare low or typical — but against its own history for **the search
+you just did**, one route on one pair of dates. Change the dates and it
+starts over. It cannot tell you whether $1,500 is good *for this route in
+general*, because it was never watching the other 2,744 date combinations.
+This one was, so it can say exactly where a price sits: the cheapest fare
+ever seen here is $1,335 and the middle of the market is around $2,500.
+That is the difference between "this looks low" and "only 2% of the 49,000
+fares seen on this route have ever been cheaper than $1,500".
 
 You can also name **priority months**, which get re-checked far more often
 and can be targeted on demand before a sale day.
