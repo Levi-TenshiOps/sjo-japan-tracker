@@ -81,12 +81,12 @@ class TestConfigActuallyPicksItUp:
         from tracker.config import load
         monkeypatch.chdir(tmp_path)
         (tmp_path / ".env").write_text(
-            "SMTP_USER=me@gmail.com\nSMTP_PASSWORD=abcdefghijklmnop\n"
+            "SMTP_USER=me@gmail.com\nSMTP_PASSWORD=not-a-real-app-password\n"
             "SMTP_HOST=smtp.gmail.com\nSMTP_PORT=587\n", encoding="utf-8")
         (tmp_path / "config.yaml").write_text("origins: [SJO]\n", encoding="utf-8")
         cfg = load("config.yaml")
         assert cfg.smtp_user == "me@gmail.com"
-        assert cfg.smtp_password == "abcdefghijklmnop"
+        assert cfg.smtp_password == "not-a-real-app-password"
         assert cfg.smtp_port == 587
 
 
