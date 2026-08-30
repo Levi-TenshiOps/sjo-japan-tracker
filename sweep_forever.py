@@ -428,6 +428,14 @@ def main() -> int:
         try:
             while True:
                 snap = SweepStore.load(args.store)
+                # Prefer what the sweep recorded over this process's own
+                # defaults; an explicit flag here still wins.
+                w_months = (focus_months if args.focus is not None
+                            else (list(snap.focus_months) or focus_months))
+                w_age = (args.focus_max_age if args.focus_max_age is not None
+                         else snap.focus_max_age_hours)
+                w_tries = (args.focus_max_tries or snap.focus_max_tries
+                           or FOCUS_MAX_TRIES)
                 if started is None:
                     # (when, cursor, focus backlog, re-check queue). The
                     # last two are baselines: the cold cursor is frozen
@@ -435,19 +443,17 @@ def main() -> int:
                     # only honest rate is the one for the work being done.
                     started = (datetime.now(timezone.utc), snap.cursor,
                                len(focus_pending(
-                                   windows, snap, focus_months,
-                                   max_age_hours=args.focus_max_age,
-                                   max_tries=(args.focus_max_tries
-                                              or FOCUS_MAX_TRIES)))
-                               if focus_months else 0,
+                                   windows, snap, w_months,
+                                   max_age_hours=w_age, max_tries=w_tries))
+                               if w_months else 0,
                                len(snap.suspect))
                 lines = watch_lines(windows, snap,
                                     threshold=prefs.good_price_usd,
                                     delay_s=(snap.delay_s or args.delay),
                                     started=started,
-                                    focus_months=focus_months,
-                                    focus_max_age_hours=args.focus_max_age,
-                                    focus_max_tries=args.focus_max_tries)
+                                    focus_months=w_months,
+                                    focus_max_age_hours=w_age,
+                                    focus_max_tries=w_tries)
                 # Home the cursor and clear so the block refreshes in
                 # place. Harmless where it is ignored: the block just
                 # repeats instead.
@@ -721,6 +727,11 @@ def main() -> int:
     while True:
         priced = 0
         store.delay_s = current_delay
+        # So `--watch` can show the focus without being handed the same
+        # flags. It is a separate process with its own argparse defaults.
+        store.focus_months = list(focus_months)
+        store.focus_max_age_hours = args.focus_max_age
+        store.focus_max_tries = args.focus_max_tries or FOCUS_MAX_TRIES
         try:
             priced = sweep_batch(
                 windows, store,

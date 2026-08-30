@@ -254,6 +254,14 @@ class SweepStore:
     #: default, so without this `--watch` reports an ETA for a rate nobody
     #: is using - and the tripwire can change the rate mid-run.
     delay_s: float = 0.0
+    #: What the running sweep was asked to focus on, written every batch
+    #: for the same reason as `delay_s`: the read-only views run in their
+    #: own process with their own defaults. Without this, `--watch` computed
+    #: the focus in backfill mode and reported "complete" while the sweep
+    #: was 1,085 windows into a refresh - it looked stalled and was not.
+    focus_months: list = field(default_factory=list)
+    focus_max_age_hours: float | None = None
+    focus_max_tries: int = 0
     last_throttle: str = ""
 
     # -- persistence -------------------------------------------------------

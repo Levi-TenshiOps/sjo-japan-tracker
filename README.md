@@ -183,7 +183,8 @@ python sweep_forever.py --stop
 # 2. re-price every priority-month window once, whatever its age
 python sweep_forever.py --focus 1,2,3 --focus-max-age 0 --focus-max-tries 1
 
-# 3. watch it, in another window
+# 3. watch it, in another window. No flags needed: it reads what the
+#    sweep is doing from the store.
 python sweep_forever.py --watch
 
 # 4. when it says the focus is complete, email yourself the results
