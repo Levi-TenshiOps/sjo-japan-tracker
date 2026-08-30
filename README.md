@@ -30,25 +30,66 @@ publish as-is.
 
 ---
 
-## How it searches
+## How it works
 
-Three things look at Google, doing different jobs:
+There is no public Google Flights API, so it reads the page. Two processes
+run, and they do different jobs:
+
+**1. The sweep** (`sweep_forever.py`) runs continuously in the background.
+It is the one that actually finds things. It walks **every** departure/
+return date combination in your search — currently 2,745 of them — one at
+a time, forever, and records the cheapest bookable fare for each. A full
+pass takes about a day, then it starts again.
+
+**2. The scheduled runs** (`tracker/cli.py`) fire six times a day, take
+what the sweep has found, re-check the most promising fares so the prices
+are current, and send you at most two emails.
+
+Between them, four things ask Google questions:
 
 | | What it does | Cost |
 |---|---|---|
-| **The sweep** | walks **every** date combination, one at a time, forever | ~4,500 requests/day |
-| **The wide net** | asks Google "cheapest fare in February?" | ~100/day |
+| **The sweep** | walks every date combination, one at a time, forever | ~4,500 requests/day |
+| **The wide net** | asks Google "cheapest fare in February?" — no dates given | ~100/day |
 | **Chrome check** | re-prices the best candidates so your email is current | ~66/day |
-| **The HTTP grid** | a fast, shallow scan; a fallback if the sweep stops | ~48/day |
+| **The HTTP grid** | a fast, shallow scan; the fallback if the sweep stops | ~48/day |
 
-The wide net **finds** fares fastest — it named the $1,347 record. The
-sweep finds them **thoroughly**, because it is the only thing that will
-ever look at a date Google never suggests.
+The wide net **finds** fares fastest — it named the first record. The sweep
+finds them **thoroughly**, because it is the only thing that will ever look
+at a date Google never suggests.
 
-**Only the browser sees the cheap fares.** The plain HTTP scrape cannot see
-the European routings where the sub-$1,400 fares live — on the same window
-it reported $1,635 where the real answer was $1,347. So its prices are
-never quoted as "the cheapest".
+### Why a real browser
+
+**The plain HTTP scrape systematically misses the cheap fares.** This is
+the single most important fact about the design. The Lufthansa-group
+routings through Zurich — where every fare under $1,600 on this route has
+been found — simply do not appear in the server-rendered HTML, at any stop
+limit, in any currency. On one window the HTTP scrape reported $1,635 where
+the real answer was $1,347.
+
+So the sweep drives **headless Chrome** (`--headless --dump-dom`) for every
+window. It costs ~14 seconds a launch against ~3 for HTTP, which is why the
+whole design is built around spending that budget carefully. The HTTP grid
+is kept only because it is the one thing that can still produce an email if
+the sweep stops, and its prices are labelled as an upper bound, never
+quoted as "the cheapest".
+
+### What happens to each result
+
+Every option Google returns goes through the same three steps:
+
+1. **Parsed** out of the page — price, airlines, total duration, and the
+   airports it connects through.
+2. **Visa-checked**, leg by leg. Google's own "connecting airports" filter
+   is only a hint, so every routing is re-checked here against
+   `tracker/airports.py`. An airport nobody has researched is **refused**,
+   not allowed, and a routing that cannot be read at all is dropped rather
+   than assumed safe.
+3. **Recorded** — the cheapest surviving fare per window goes to
+   `discoveries.json`, and every accepted fare is appended to
+   `sweep_history.csv`, which is never rewritten.
+
+Typically 9 of 13 options on a window are thrown out at step 2.
 
 ## Your two emails
 
@@ -265,36 +306,70 @@ stopped.
 
 ## Commands
 
+Setup is the four lines at the top of this file. Everything else:
+
+### The background search
+
 ```bash
-python sweep_forever.py --watch      # live progress, leave it open
-python sweep_forever.py --status     # what has it found?
-python sweep_forever.py --stop       # stop cleanly and wait for it to exit
-python -m tracker.cli --status       # settings and coverage
-python -m tracker.cli --dry-run      # test, send nothing
-python -m tracker.cli --email-now    # email what has been collected so far
-python -m tracker.cli --share-with list   # who else gets the fare emails
-python sweep_forever.py --coverage   # how often each date is re-checked
-python sweep_forever.py --readiness  # is it safe to change the rate?
-python -m pytest tests/ -q           # 1,584 tests, offline
+python sweep_forever.py                 # start it; leave it running
+python sweep_forever.py --stop          # stop cleanly, waits until it has
+python sweep_forever.py --watch         # live progress, refreshing
+python sweep_forever.py --status        # what it has found, then exit
+python sweep_forever.py --coverage      # how often each date is re-checked
+python sweep_forever.py --readiness     # is it safe to change the rate?
+python sweep_forever.py --once          # a single batch, then exit
 ```
 
-`--watch`, `--status`, `--coverage`, `--readiness` and `--email-now` only
-read files. They are safe to run beside the sweep and none of them touches
-Google.
+Useful flags on the sweep:
 
-**Always stop the sweep with `--stop`.** A hard kill can leave half a line
-in the CSV, and one such line once crashed every scheduled run for four
-hours.
+| Flag | Default | What it does |
+|---|---|---|
+| `--delay N` | 5 | seconds between launches. Higher is gentler |
+| `--batch N` | 10 | windows priced between saves |
+| `--focus 1,2,3` | from config | finish these months before the rest |
+| `--focus-max-age H` | off | treat an answer older than H hours as stale |
+| `--focus-max-tries N` | 3 | how many times one window may be re-priced |
+| `--stop-timeout N` | 420 | how long `--stop` waits before giving up |
+| `--recheck-unverified` | — | queue every window whose "no fares" was never trustworthy |
+| `--log PATH` | sweep.log | where to append the log |
+
+### Emails
+
+```bash
+python -m tracker.cli --email-now       # email what has been collected so far
+python -m tracker.cli --dry-run         # a full run that sends nothing
+python -m tracker.cli --status          # settings and coverage
+python -m tracker.cli --save-preview out.html   # write the email to a file
+python -m tracker.cli --share-with "ana@x.com, luis@y.com"
+python -m tracker.cli --share-with list
+python -m tracker.cli --share-with ""   # remove everyone
+```
+
+### Tests
+
+```bash
+python -m pytest tests/ -q              # 1,611 tests, entirely offline
+```
+
+### Safe to run any time
+
+`--watch`, `--status`, `--coverage`, `--readiness` and `--email-now` **only
+read files**. None of them touches Google, so they cannot be throttled and
+will not compete with the sweep. Run them as often as you like.
+
+**Always stop the sweep with `--stop`, never Ctrl-C or a kill.** A hard
+kill can leave half a line in the CSV, and one such line once crashed every
+scheduled run for four hours before anyone noticed.
 
 ## What this route actually costs
 
-From 18,600+ browser-verified, visa-free observations:
+From 47,000+ browser-verified, visa-free observations:
 
 | | |
 |---|---|
-| Cheapest ever found | **$1,336** — Edelweiss/SWISS via Zurich, 46 h |
-| Median | **$2,567** |
-| At or under $1,400 | 1.3% of everything seen |
+| Cheapest ever found | **$1,335** — Edelweiss/SWISS via Zurich, 46 h |
+| Median | **$2,541** |
+| At or under $1,400 | 1.1% of everything seen |
 
 **Every fare at or under $1,600 has been Lufthansa Group** — Edelweiss,
 SWISS or Lufthansa, through Zurich, Frankfurt or Munich.
@@ -382,18 +457,65 @@ knowing the edge of the net matters more than the net:
   the 16-hour silence watchdog fire — so a one-off crash is visible in the
   log, not in your inbox.
 
-## Files
+## What it collects, and where it goes
 
-| File | Committed | Contains |
-|---|---|---|
-| `config.yaml` | yes | search settings, nothing personal |
-| `preferences.json` | **no** | your email, months, budget |
-| `.env` | **no** | SMTP credentials |
-| `sweep_history.csv` | optional | the sweep's price log — the big one |
-| `price_history.csv` | optional | the scheduled runs' price log |
-| `discoveries.json` | no | the sweep's cursor and findings |
-| `state.json`, `throttle.json` | no | runtime state |
-| `sweep.log`, `tracker.log` | no | what each process did |
+Everything is a plain file in the project folder. Nothing leaves your
+machine except the emails.
+
+### The two that hold the fares
+
+**`sweep_history.csv`** — the important one. Every visa-free fare ever
+seen, appended and never rewritten. One row per option, so a window that
+returned three bookable fares writes three rows:
+
+```
+checked_at_utc, origin, destination, depart_date, return_date,
+price_usd, duration_min, stops, hubs, airlines, band, band_source, deep_link
+```
+
+Currently ~46,000 rows, ~4.9 MB, growing by roughly 10,000 rows a day.
+This is where every claim in this file comes from — the median fare, the
+hub comparisons, the weekday analysis. Deleting it loses the history but
+breaks nothing.
+
+**`price_history.csv`** — the same format, written by the six scheduled
+runs rather than the sweep. Much smaller (~2,800 rows).
+
+### The one that holds "what can I book right now"
+
+**`discoveries.json`** — the sweep's working state, rewritten after every
+window:
+
+- the **cheapest current fare per window** (the best 400 are kept; the rest
+  live on in the CSV)
+- the **cursor** — how far through the pass it is, so a restart resumes
+  rather than starting over
+- the **check ledger** — for every window: when it was last looked at, in
+  how many seconds, whether the page was blank, and whether the connection
+  was trustworthy at the time. This is what makes "no fares on this date"
+  distinguishable from "Google refused to answer".
+- health samples, the re-check queue, and the focus/rate settings
+
+It holds the **latest** price, not the best ever seen — the question it
+answers is "what can be booked on this date now".
+
+### The small ones
+
+| File | Contains |
+|---|---|
+| `config.yaml` | search settings — the only one committed to git |
+| `preferences.json` | your email, months, budget, friends' addresses |
+| `.env` | SMTP credentials |
+| `state.json` | which of today's two emails have been sent |
+| `throttle.json` | the HTTP grid's request budget, alarm flags |
+| `month_hints.json` | the wide net's cheapest-month answers |
+| `rotation.json` | the scheduled runs' position in their rotation |
+| `google.lock`, `sweep.pid`, `sweep.stop` | coordination between processes |
+| `sweep.log`, `tracker.log` | what each process did |
+
+**`preferences.json` and `.env` are gitignored**, so the repository stays
+publishable — no addresses, no credentials, no personal data in anything
+tracked.
 
 ## Honest caveats
 
