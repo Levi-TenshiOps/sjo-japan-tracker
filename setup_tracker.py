@@ -12,7 +12,7 @@ from __future__ import annotations
 import getpass
 import re
 import sys
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -45,16 +45,6 @@ def ask_email(prompt: str, default: str = "") -> str:
         if EMAIL_RE.match(value):
             return value
         print(f"  '{value}' does not look like an email address.")
-
-
-def ask_date(prompt: str, default: str) -> str:
-    while True:
-        value = ask(prompt, default)
-        try:
-            datetime.strptime(value, "%Y-%m-%d")
-            return value
-        except ValueError:
-            print("  Use YYYY-MM-DD, e.g. 2027-01-15.")
 
 
 def ask_weeks(prompt: str, default: str) -> list[int]:

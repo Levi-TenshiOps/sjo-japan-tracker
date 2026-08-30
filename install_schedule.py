@@ -212,11 +212,11 @@ def install_cron(hours: list[int], root: Path, dry: bool) -> int:
 def print_windows(hours: list[int], root: Path) -> int:
     """Print PowerShell that registers the jobs. Deliberately not schtasks.
 
-    This project lives at "D:\\Levi\\Japan flight scanner\\..." and schtasks
-    mangles a /TR value containing spaces - it reads the path as separate
-    arguments and dies with "Invalid argument/option - 'flight'". Escaping
-    it well enough to survive both cmd.exe and the task scheduler is
-    possible and unreadable.
+    A project path containing spaces - "...\\Japan flight scanner\\..." -
+    breaks schtasks: it reads the /TR value at the first space and dies
+    with "Invalid argument/option - 'flight'". Escaping that well enough
+    to survive both cmd.exe and the task scheduler is possible and
+    unreadable.
 
     Register-ScheduledTask takes the executable and its arguments as
     separate parameters, so quoting stops being the caller's problem. It

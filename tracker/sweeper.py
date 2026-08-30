@@ -42,7 +42,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import date as Date
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
+from typing import Callable, Sequence
 
 from . import gate
 from . import history as history_mod

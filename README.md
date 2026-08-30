@@ -537,4 +537,14 @@ tracked.
   list reflects the general rule for a Costa Rican passport as of August
   2026. Confirm with the airline before you pay.
 - **Scraping is against Google's Terms of Service.** This is a personal,
-  low-volume tool checking your own travel plans. Keep it that way.
+  low-volume tool checking your own travel plans. Keep it that way. If you
+  run it, you are the one making those requests.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Use it, change it, share it; no warranty.
+
+The visa rules in `tracker/airports.py` reflect the general position for a
+**Costa Rican** passport as of August 2026. If yours is different, that
+file is the first thing to change — and confirm with the airline before
+you pay either way.

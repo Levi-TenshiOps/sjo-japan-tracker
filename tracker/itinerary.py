@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date as Date
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from .airports import ban_reason, describe_hub, destination_codes
 
