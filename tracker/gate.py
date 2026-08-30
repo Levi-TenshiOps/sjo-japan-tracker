@@ -103,10 +103,24 @@ def is_stale(path: Path, *, stale_after: float = STALE_AFTER_SECONDS) -> bool:
     info = _read(path)
     if info is None:
         return True                     # unreadable - treat as abandoned
-    age = time.time() - float(info.get("beat", 0) or 0)
+    # Valid JSON is not the same as usable values. `_read` already tolerates
+    # a torn or truncated file, but a dict whose `beat` is a string sails
+    # past it and raises here - inside the context manager that guards every
+    # request to Google, so the failure lands on whoever happened to call.
+    # Nothing writes that today; the point is that this reader must not be
+    # the thing that decides. Same lesson as the CSV that killed every
+    # scheduled run for four hours: tolerate the file, do not trust it.
+    try:
+        age = time.time() - float(info.get("beat", 0) or 0)
+    except (TypeError, ValueError):
+        return True                     # nonsense timestamp - assume dead
     if age > stale_after:
         return True
-    return not _alive(int(info.get("pid", -1) or -1))
+    try:
+        pid = int(info.get("pid", -1) or -1)
+    except (TypeError, ValueError):
+        return True                     # nonsense pid - assume dead
+    return not _alive(pid)
 
 
 def _claim(path: Path, owner: str) -> bool:

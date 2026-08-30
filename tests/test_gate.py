@@ -266,3 +266,48 @@ class TestTheSweepWaitsRatherThanBargingIn:
         from tracker import sweeper
         src = inspect.getsource(sweeper.sweep_batch)
         assert 'on_timeout="wait"' in src
+
+
+class TestACorruptLockIsBrokenNotFatal:
+    """Found in the pre-publication pass, 2026-08-30.
+
+    `_read` tolerates a torn or truncated lock file, but a file that is
+    *valid JSON with the wrong types* - {"pid": "x", "beat": "2000-01-01"} -
+    sails past it and raised on the float(). That happens inside the
+    context manager guarding every request to Google, so the failure lands
+    on whoever happened to be calling: the sweep pauses 60s, a scheduled
+    run dies before its email.
+
+    Nothing writes such a file today. The point is that this reader must
+    not be what decides - the same lesson as the CSV row that killed every
+    scheduled run for four hours.
+    """
+
+    @pytest.mark.parametrize("blob", [
+        '{"pid": "x", "beat": 1.0}',
+        '{"pid": 1, "beat": "2000-01-01T00:00:00+00:00"}',
+        '{"pid": null, "beat": null}',
+        '{"pid": [], "beat": {}}',
+        '{"beat": "nonsense"}',
+        '{}',
+    ])
+    def test_it_is_treated_as_stale_rather_than_raising(self, tmp_path, blob):
+        p = tmp_path / "g.lock"
+        p.write_text(blob, encoding="utf-8")
+        assert gate_mod.is_stale(p) is True, blob
+
+    def test_a_corrupt_lock_can_still_be_acquired(self, tmp_path):
+        """The whole point: a bad lock file must not wedge the sweep."""
+        p = tmp_path / "g.lock"
+        p.write_text('{"pid": "x", "beat": "yesterday"}', encoding="utf-8")
+        with gate_mod.google("after", path=str(p), timeout=2,
+                         on_timeout="proceed"):
+            pass                        # must not raise
+
+    def test_a_live_lock_is_still_respected(self, tmp_path):
+        """Hardening must not make it break locks it should honour."""
+        import os, time
+        p = tmp_path / "g.lock"
+        p.write_text(json.dumps({"pid": os.getpid(), "owner": "me",
+                                 "beat": time.time()}), encoding="utf-8")
+        assert gate_mod.is_stale(p) is False
