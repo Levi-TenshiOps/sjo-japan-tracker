@@ -40,6 +40,7 @@ has32.html
 discoveries.json
 month_hints.json
 sweep.log
+sale_day.log
 /hubaudit.json
 /sweep_history.csv
 /google.lock

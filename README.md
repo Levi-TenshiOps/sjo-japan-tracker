@@ -194,17 +194,19 @@ python sweep_forever.py --watch
 python -m tracker.cli --email-now
 ```
 
-**~7 hours** for all 1,089 January–March windows. January alone is done in
-~3.7 h, February by ~6.8 h. You don't have to wait: `--email-now` reads
-what's on disk and makes **no requests**, so run it at lunchtime for a
-first look and again at the end.
+**~8.5 hours** for all 1,089 January–March windows — measured on a real
+run, not projected. The arithmetic says 7.2 h; the extra hour is the six
+scheduled runs holding the Google lock for their Chrome phases, plus the
+jitter on every wait. You don't have to wait for the end: `--email-now`
+reads what's on disk and makes **no requests**, so run it part-way for a
+first look.
 
 Two ways to ask, and they differ:
 
 | command | finishes | re-prices |
 |---|---|---|
 | `--focus-max-age 12` | ~4 h | only what's over 12 h old |
-| `--focus-max-age 0 --focus-max-tries 1` | ~7 h | **all 1,089, once each** |
+| `--focus-max-age 0 --focus-max-tries 1` | ~8.5 h | **all 1,089, once each** |
 
 Use the second on a real sale day: a fare checked an hour ago still holds a
 *pre-sale* price, and an age cut-off skips exactly those. `--focus-max-tries 1`
@@ -212,8 +214,12 @@ is what makes it stop — without it, windows go stale while it's still
 running and it keeps finding more to do.
 
 No `--delay` needed; 5s is the default and survives a reboot. If a throttle
-lands mid-run the sweep slows itself and the run stretches to ~9 h — it
-won't fail, it'll take longer.
+lands mid-run the sweep slows itself and the run takes longer — it won't
+fail.
+
+`python sale_day.py` does all four steps unattended, waits for the focus to
+actually finish (it cannot be timed — `sweep_forever` doesn't exit when a
+focus completes), then emails. Schedule it and go to bed.
 
 ## Commands
 

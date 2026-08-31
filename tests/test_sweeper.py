@@ -25,6 +25,19 @@ FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 NOW = datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc)
 
 
+def _recent(hours: float = 1.0) -> str:
+    """A timestamp `hours` ago, as an ISO string.
+
+    Never hardcode one. `prune` drops findings older than DROP_AFTER_HOURS
+    (7 days) and several alarms measure age, so a fixed date passes for a
+    week and then fails for reasons nobody can diagnose. Two tests in this
+    file did exactly that, seven days after they were written - caught on
+    the day the repo was being prepared to go public, which is the worst
+    possible time to discover a clone cannot pass its own suite.
+    """
+    return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+
 def opt(price=1347, depart=date(2027, 1, 29), ret=date(2027, 2, 25),
         stops=("ZRH",)):
     return BrowserOption(
@@ -1978,7 +1991,7 @@ class TestTheHealthSampleMigration:
         p = tmp_path / "s.json"
         s = SweepStore(recent=[1] * 20)
         s.found["k"] = {"depart": "2027-01-29", "ret": "2027-02-25",
-                        "price_usd": 1347, "seen_at": "2026-08-24T00:00:00+00:00"}
+                        "price_usd": 1347, "seen_at": _recent()}
         s.save(p)
         assert SweepStore.load(p).found, "the migration threw away a fare"
 
@@ -2042,7 +2055,7 @@ class TestPruningDoesNotLoseTheAccounting:
                 "price_usd": price_of(i), "origin": "SJO",
                 "destination": "TYO", "stops": [], "airlines": "",
                 "total_minutes": 2780, "deep_link": "",
-                "seen_at": "2026-08-24T12:00:00+00:00",
+                "seen_at": _recent(),
             }
         return s
 
@@ -2074,7 +2087,11 @@ class TestPruningDoesNotLoseTheAccounting:
     def test_a_newer_real_check_is_not_overwritten(self):
         s = self._store_with(2, lambda i: 1000 + i * 100)
         key = sorted(s.found)[-1]
-        s.checked[key] = {"at": "2026-08-25T00:00:00+00:00",
+        # Newer than the finding, which `_store_with` stamps an hour ago.
+        # This was a fixed date, and once the finding became relative it
+        # was the *older* of the two - so prune correctly overwrote it and
+        # the test failed for the opposite of the reason it exists.
+        s.checked[key] = {"at": _recent(hours=0.5),
                           "empty": True, "healthy": False, "secs": 2.0}
         s.prune(max_entries=1)
         assert s.checked[key]["healthy"] is False, "an older finding clobbered a newer check"
@@ -2272,8 +2289,8 @@ class TestTheAllClearMatchesTheAlarmItClears:
     def test_the_duration_comes_from_the_alarmed_episode(self):
         sent, on_alarm = self._sent()
         s = SweepStore()
-        s.alarm_sent_for = "2026-08-24T12:00:00+00:00"    # hours ago
-        s.throttled_since = "2026-08-24T22:50:00+00:00"   # a later blip
+        s.alarm_sent_for = _recent(hours=10)              # hours ago
+        s.throttled_since = _recent(hours=0.2)            # a later blip
         s.recent = [0] * EMPTY_ALARM_WINDOW
         sweep_batch(windows(1), s, batch=1, fetch=FakeChrome(""),
                     sleep=lambda _: None, delay_s=0, on_alarm=on_alarm)
@@ -2298,7 +2315,7 @@ class TestTheAllClearMatchesTheAlarmItClears:
         """A rest empties `recent`; two quiet windows prove nothing."""
         sent, on_alarm = self._sent()
         s = SweepStore()
-        s.alarm_sent_for = "2026-08-24T12:00:00+00:00"
+        s.alarm_sent_for = _recent(hours=10)
         s.recent = []                                     # just rested
         sweep_batch(windows(1), s, batch=1, fetch=FakeChrome(""),
                     sleep=lambda _: None, delay_s=0, on_alarm=on_alarm)
