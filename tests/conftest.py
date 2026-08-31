@@ -78,3 +78,63 @@ def _never_write_the_real_store(monkeypatch, tmp_path):
     """
     monkeypatch.setattr(sweeper, "DEFAULT_STORE",
                         str(tmp_path / "discoveries.json"), raising=False)
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _never_send_real_email():
+    """No test may open an SMTP connection. Ever.
+
+    Found on 2026-08-31 the only way it could be found: the trip owner
+    received two real alarm emails, "No flight email has gone out for
+    43806 hours", timed to the minute with a test run.
+
+    `tests/test_rate_tripwire.py` drives the real `sweep_forever.main()`.
+    It redirects `--store` and `--preferences` to tmp_path but nothing
+    redirects the *config*, so `cfg.state_file` was the production
+    `state.json` and `alarm_cfg` carried the real credentials out of
+    `.env`. The silence watchdog compared the two, believed the scheduled
+    runs had died, and sent - correctly, to a real inbox, from a test.
+
+    It normally stays quiet only because `state.json` is usually fresher
+    than SILENCE_HOURS. That is not a safeguard, it is a coincidence: any
+    run of the suite on a machine whose tracker has been idle overnight
+    sends real mail. The 43806 hours came from a clock-shifted run, but
+    the wiring was live the whole time.
+
+    Blocking the transport is the guarantee, because it does not depend on
+    anyone remembering to redirect a path. Tests that deliberately
+    exercise a broken SMTP still pass - a raising socket is exactly what
+    they assert is survivable.
+    """
+    import smtplib
+
+    def _blocked(*args, **kwargs):
+        raise RuntimeError(
+            "A test tried to open an SMTP connection. Tests never send "
+            "email - inject a fake, or assert on the EmailContent. See "
+            "tests/conftest.py::_never_send_real_email.")
+
+    real_smtp, real_ssl = smtplib.SMTP, smtplib.SMTP_SSL
+    smtplib.SMTP, smtplib.SMTP_SSL = _blocked, _blocked
+    yield
+    smtplib.SMTP, smtplib.SMTP_SSL = real_smtp, real_ssl
+
+
+@pytest.fixture(autouse=True)
+def _never_read_the_real_state(monkeypatch, tmp_path):
+    """`state_file` is a relative default, so it resolves against wherever
+    pytest was started - the repository, normally. A test that reads it is
+    asking the machine it runs on how many emails went out today, which
+    makes its result depend on the time of day. Same shape as the lock and
+    the store above, and the reason the alarm below it could fire at all.
+    """
+    from tracker import config as config_mod
+
+    real_load = config_mod.load
+
+    def _sandboxed(*args, **kwargs):
+        cfg = real_load(*args, **kwargs)
+        cfg.state_file = str(tmp_path / "state.json")
+        return cfg
+
+    monkeypatch.setattr(config_mod, "load", _sandboxed)

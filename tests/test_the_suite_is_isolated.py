@@ -20,6 +20,7 @@ conftest.py redirects the defaults for the whole session. These tests are
 what stop that quietly regressing.
 """
 import os
+import pytest
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -78,3 +79,51 @@ class TestNothingIsWrittenWhereItShouldNotBe:
                      if os.path.exists(p) else 0) for p in watched}
         changed = [os.path.basename(p) for p in watched if before[p] != after[p]]
         assert changed == [], f"a test run touched {changed}"
+
+
+class TestTheSuiteCannotSendEmail:
+    """The suite emailed the trip owner twice on 2026-08-31.
+
+    Not a near miss and not a simulation - two real messages, real
+    credentials, real inbox, sent by `pytest`. The subject said the
+    scheduled runs had been silent for 43806 hours, which was the alarm
+    reading production `state.json` while a test drove the sweep's main
+    loop.
+    """
+
+    def test_smtp_is_blocked(self):
+        import smtplib
+        with pytest.raises(RuntimeError, match="never send email"):
+            smtplib.SMTP("localhost", 25)
+        with pytest.raises(RuntimeError, match="never send email"):
+            smtplib.SMTP_SSL("localhost", 465)
+
+    def test_the_alarm_path_cannot_deliver(self):
+        """The exact path that fired: alarm.send with a usable config.
+
+        It must come back False rather than delivering. `send` swallows
+        the failure by design - a failed alarm must never stop the sweep -
+        so the assertion is that nothing left the machine, not that it
+        raised.
+        """
+        from tracker import alarm as alarm_mod
+
+        cfg = alarm_mod.AlarmConfig(
+            to_addr="nobody@example.invalid", smtp_host="smtp.example.invalid",
+            smtp_port=465, smtp_user="u", smtp_password="p")
+        assert cfg.usable, "the test needs a config that would really send"
+        content = alarm_mod.silent_email(hours=43806.0, threshold=16.0)
+        assert alarm_mod.send(content, cfg) is False
+
+    def test_config_load_does_not_hand_out_the_real_state_file(self):
+        """A test reading production state.json is asking the machine it
+        runs on what time it is, which is how the alarm came to fire."""
+        from tracker import config as config_mod
+
+        cfg = config_mod.load()
+        assert cfg.state_file != "state.json", (
+            "config.load() returned the production state file; a test that "
+            "reads it depends on when this machine last sent an email")
+        assert not os.path.samefile(
+            os.path.dirname(os.path.abspath(cfg.state_file)) or ".", os.getcwd()), \
+            "the sandboxed state file still resolves inside the repository"
